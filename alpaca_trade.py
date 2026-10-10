@@ -79,10 +79,23 @@ def push(title: str, text: str):
         print(f"[PUSH-DISABLED] {title}\n{text}")
         return
     try:
-        if "sctapi.ftqq.com" in PUSH_WEBHOOK:
-            r = SESSION.post(PUSH_WEBHOOK, json={"title": title, "desp": text}, timeout=15)
+        url = PUSH_WEBHOOK
+        if "sctapi.ftqq.com" in url:  # Server酱
+            r = SESSION.post(url, json={"title": title, "desp": text}, timeout=15)
+        elif "qyapi.weixin.qq.com" in url:  # 企业微信群机器人
+            r = SESSION.post(url, json={"msgtype": "markdown",
+                                        "markdown": {"content": f"**{title}**\n{text}"}},
+                             timeout=15)
+        elif "oapi.dingtalk.com" in url:  # 钉钉群机器人
+            r = SESSION.post(url, json={"msgtype": "markdown",
+                                       "markdown": {"title": title, "text": text}},
+                             timeout=15)
+        elif "api.telegram.org" in url:  # Telegram Bot
+            chat = os.environ.get("TG_CHAT_ID", "")
+            r = SESSION.post(url, json={"chat_id": chat,
+                                        "text": f"{title}\n{text}"}, timeout=15)
         else:
-            r = SESSION.post(PUSH_WEBHOOK, json={"title": title, "content": text}, timeout=15)
+            r = SESSION.post(url, json={"title": title, "content": text}, timeout=15)
         print(f"[PUSH] {r.status_code} {r.text[:100]}")
     except Exception as e:
         print(f"[PUSH-ERROR] {type(e).__name__}: {e}")
