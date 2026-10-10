@@ -350,14 +350,9 @@ def main():
     # --- 每轮写出最新快照给镜像交易器 ---
     write_latest(result, bool(changes or new_orders))
 
-    # --- 推送逻辑 (极简: 只有代码和比例) ---
-    if MANUAL:
-        push("持仓查询", push_snapshot_text(result))
-    elif changes or new_orders:
+    # --- 推送逻辑: 只在真实调仓时推送; 收盘对战对比由 alpaca_trade.py 负责 ---
+    if changes or new_orders:
         push("调仓变动", push_alert_text(result, changes, state.get("pcts", {})))
-    elif now_ny.hour >= 16 and state.get("last_summary_date") != now_ny.strftime("%F"):
-        push("收盘持仓", push_snapshot_text(result))
-        state["last_summary_date"] = now_ny.strftime("%F")
 
     # --- 状态更新 (有实质变化才写, 避免每次运行都产生 commit) ---
     if changes or new_orders:

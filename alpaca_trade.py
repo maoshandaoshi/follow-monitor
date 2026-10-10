@@ -47,7 +47,7 @@ STATE_FILE = os.path.join(DATA_DIR, "trader.json")    # 本脚本状态(由 work
 ALPACA_KEY = os.environ.get("ALPACA_KEY_ID", "").strip()
 ALPACA_SECRET = os.environ.get("ALPACA_SECRET", "").strip()
 PUSH_WEBHOOK = os.environ.get("PUSH_WEBHOOK", "").strip()
-MANUAL = os.environ.get("MANUAL", "") == "1"
+MANUAL = os.environ.get("MANUAL", "").strip().lower() in ("1", "true", "yes")
 
 BASE = "https://paper-api.alpaca.markets/v2"
 DATA = "https://data.alpaca.markets/v2"
