@@ -41,6 +41,13 @@ jobs:
           TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
         run: python follow_action.py
 
+      - name: Run alpaca mirror trader
+        env:
+          ALPACA_KEY_ID:     ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET:      ${{ secrets.ALPACA_SECRET }}
+          PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
+        run: python alpaca_trade.py
+
       - name: Commit state changes
         run: |
           git config user.name  "follow-bot"

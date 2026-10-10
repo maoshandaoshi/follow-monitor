@@ -198,6 +198,23 @@ def save_state(st: dict):
         json.dump(st, f, ensure_ascii=False, indent=1)
 
 
+LATEST_FILE = os.path.join(DATA_DIR, "latest.json")
+
+
+def write_latest(r: dict, rebalance: bool):
+    """每轮写出当前目标权重+跟投总值, 供 alpaca_trade.py 镜像执行"""
+    payload = {
+        "ts": r["ts"],
+        "total_asset": r["total_asset"],
+        "currency": r["currency"],
+        "weights": {s["ticker"]: s["pct_of_total"]
+                    for s in r["stocks"] if s["quantity"] > 0},
+        "rebalance": rebalance,
+    }
+    with open(LATEST_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+
+
 def diff_positions(prev: dict, cur: dict) -> list:
     """返回 (ticker, 原股数, 新股数) 列表; 股数变化才是真调仓(比例会随行情波动)"""
     out = []
@@ -328,6 +345,9 @@ def main():
                   if str(o.get("orderId") or o.get("id") or "?") not in known]
 
     print(snapshot_text(result, changes, new_orders))
+
+    # --- 每轮写出最新快照给镜像交易器 ---
+    write_latest(result, bool(changes or new_orders))
 
     # --- 推送逻辑 (极简: 只有代码和比例) ---
     if MANUAL:
