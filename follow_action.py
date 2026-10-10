@@ -199,7 +199,7 @@ def save_state(st: dict):
 
 
 def diff_positions(prev: dict, cur: dict) -> list:
-    """返回人类可读的调仓描述列表"""
+    """返回 (ticker, 原股数, 新股数) 列表; 股数变化才是真调仓(比例会随行情波动)"""
     out = []
     for t in sorted(set(prev) | set(cur)):
         old, new = prev.get(t), cur.get(t)
@@ -207,13 +207,7 @@ def diff_positions(prev: dict, cur: dict) -> list:
         new = 0.0 if new is None else float(new)
         if abs(old - new) < 1e-9:
             continue
-        if old == 0:
-            out.append(f"新买入 {t}: {new:g} 股")
-        elif new == 0:
-            out.append(f"清仓 {t}: {old:g} -> 0")
-        else:
-            delta = new - old
-            out.append(f"调仓 {t}: {old:g} -> {new:g} 股 ({delta:+g})")
+        out.append((t, old, new))
     return out
 
 
@@ -269,19 +263,35 @@ def push(title: str, text: str):
 
 
 def snapshot_text(r: dict, changes=None, new_orders=None) -> str:
-    lines = [f"策略: {r['strategy']}  ({r['currency']})",
-             f"总资产: {r['total_asset']:,.2f}   现金: {r['cash']:,.2f} ({r['cash_pct']}%)",
-             "-" * 44]
+    """完整版, 仅用于 Actions 控制台日志(不推送)"""
+    lines = [f"[{r['ts']} NY] 持仓 {len([s for s in r['stocks'] if s['quantity'] > 0])} 只, "
+             f"总资产 {r['total_asset']:,.2f} {r['currency']}"]
     for s in r["stocks"]:
         if s["quantity"] == 0:
             continue
         lines.append(f"{s['ticker']:<8} {s['quantity']:>6g} 股  "
                      f"{s['market_value']:>12,.2f}  ({s['pct_of_total']}%)")
     if changes:
-        lines += ["", "== 调仓明细 =="] + [f"  {c}" for c in changes]
+        lines += ["", "== 调仓明细 =="] + [f"  {c[0]}: {c[1]:g} -> {c[2]:g} 股" for c in changes]
     if new_orders:
         lines += ["", "== 最新订单 =="] + [f"  {order_brief(o)}" for o in new_orders[:6]]
     return "\n".join(lines)
+
+
+def push_snapshot_text(r: dict) -> str:
+    """推送版: 只有 股票代码 比例"""
+    lines = [f"{s['ticker']} {s['pct_of_total']}%" for s in r["stocks"] if s["quantity"] > 0]
+    return "\n".join(lines) if lines else "(空仓)"
+
+
+def push_alert_text(result: dict, changes: list, prev_pcts: dict) -> str:
+    """推送版: 变动的股票 之前比例 -> 目前比例"""
+    lines = []
+    for t, _old_q, _new_q in changes:
+        cur_pct = next((s["pct_of_total"] for s in result["stocks"] if s["ticker"] == t), 0)
+        prev = prev_pcts.get(t, 0)
+        lines.append(f"{t} {prev}% -> {cur_pct}%")
+    return "\n".join(lines) if lines else push_snapshot_text(result)
 
 
 # ---------------- 主流程 ----------------
@@ -309,6 +319,8 @@ def main():
 
     cur_pos = {s["ticker"]: s["quantity"] for s in result["stocks"]
                if s["quantity"] > 0}
+    cur_pcts = {s["ticker"]: s["pct_of_total"] for s in result["stocks"]
+                if s["quantity"] > 0}
     changes = diff_positions(state.get("positions", {}), cur_pos)
 
     known = list(state.get("known_order_ids") or [])
@@ -317,19 +329,19 @@ def main():
 
     print(snapshot_text(result, changes, new_orders))
 
-    # --- 推送逻辑 ---
+    # --- 推送逻辑 (极简: 只有代码和比例) ---
     if MANUAL:
-        push("跟投易持仓查询", snapshot_text(result, changes, new_orders))
+        push("持仓查询", push_snapshot_text(result))
     elif changes or new_orders:
-        push("🔔 跟投易调仓告警",
-             snapshot_text(result, changes, new_orders) + f"\n\n时间: {result['ts']} (纽约)")
+        push("调仓变动", push_alert_text(result, changes, state.get("pcts", {})))
     elif now_ny.hour >= 16 and state.get("last_summary_date") != now_ny.strftime("%F"):
-        push("📊 跟投易收盘摘要", snapshot_text(result))
+        push("收盘持仓", push_snapshot_text(result))
         state["last_summary_date"] = now_ny.strftime("%F")
 
     # --- 状态更新 (有实质变化才写, 避免每次运行都产生 commit) ---
     if changes or new_orders:
         state["positions"] = cur_pos
+        state["pcts"] = cur_pcts
         state["ts"] = result["ts"]
     if new_orders:
         for o in new_orders:
