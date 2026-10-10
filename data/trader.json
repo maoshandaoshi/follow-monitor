@@ -1,0 +1,40 @@
+{
+ "targets": {
+  "FNGU": 25.83,
+  "CRCL": 24.69,
+  "UBER": 20.37,
+  "PBR": 18.61,
+  "INTC": 9.98
+ },
+ "arrival": {
+  "CRCL": 85.8,
+  "FNGU": 36.72,
+  "INTC": 102.71,
+  "PBR": 25.16,
+  "UBER": 69.795
+ },
+ "desired_qty": {
+  "CRCL": 287,
+  "FNGU": 703,
+  "INTC": 97,
+  "PBR": 739,
+  "UBER": 291
+ },
+ "target_ts": "2026-10-10T18:59:52.308399-04:00",
+ "target_src_ts": "2026-10-10 18:59:50",
+ "race": {
+  "t0": "2026-10-10 18:59 NY",
+  "follow_base": 164654.29,
+  "alpaca_base": 100000.0
+ },
+ "exec": {
+  "fills": 0,
+  "buy_notional": 0,
+  "buy_slip": 0,
+  "sell_notional": 0,
+  "sell_slip": 0
+ },
+ "warned": {},
+ "last_report": "2026-10-10",
+ "last_fill_check": "2026-10-10T00:00:00Z"
+}
