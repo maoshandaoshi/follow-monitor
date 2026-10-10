@@ -203,6 +203,7 @@ LATEST_FILE = os.path.join(DATA_DIR, "latest.json")
 
 def write_latest(r: dict, rebalance: bool):
     """每轮写出当前目标权重+跟投总值, 供 alpaca_trade.py 镜像执行"""
+    os.makedirs(DATA_DIR, exist_ok=True)
     payload = {
         "ts": r["ts"],
         "total_asset": r["total_asset"],
