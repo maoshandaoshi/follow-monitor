@@ -30,11 +30,15 @@ Alpaca 镜像跟单执行器 (paper)
   PUSH_WEBHOOK                   推送地址 (可选)
   MANUAL=1                       手动模式: 只报告状态, 不交易
 """
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
 import time
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
 import requests
@@ -94,6 +98,18 @@ def push(title: str, text: str):
             chat = os.environ.get("TG_CHAT_ID", "")
             r = SESSION.post(url, json={"chat_id": chat,
                                         "text": f"{title}\n{text}"}, timeout=15)
+        elif "open.feishu.cn" in url:  # 飞书自定义机器人
+            # 签名校验模式: PUSH_WEBHOOK 填 webhook地址?secret=你的签名密钥
+            payload = {"msg_type": "text", "content": {"text": f"{title}\n{text}"}}
+            q = parse_qs(urlparse(url).query)
+            if q.get("secret"):
+                ts = str(int(time.time()))
+                sign = base64.b64encode(hmac.new(
+                    f"{ts}\n{q['secret'][0]}".encode(), b"",
+                    hashlib.sha256).digest()).decode()
+                payload["timestamp"] = ts
+                payload["sign"] = sign
+            r = SESSION.post(url.split("?")[0], json=payload, timeout=15)
         else:
             r = SESSION.post(url, json={"title": title, "content": text}, timeout=15)
         print(f"[PUSH] {r.status_code} {r.text[:100]}")

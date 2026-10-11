@@ -19,15 +19,20 @@
   USMART_PUBLIC_KEY   RSA 公钥 base64 单行 (必须)
   USMART_PRIVATE_KEY  RSA 私钥 base64 单行 (必须, 可含换行自动剔除)
   PUSH_WEBHOOK        推送地址       (可选, 不填则仅打印到日志)
+                      支持多个(英文逗号分隔): Server酱 / 企业微信 / 钉钉 /
+                      Telegram / 飞书(webhook地址?secret=签名密钥)
   MANUAL              1=跳过盘中判断, 强制执行并推送完整快照
 """
 import base64
+import hashlib
+import hmac
 import json
 import os
 import re
 import sys
 import time
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
 import requests
@@ -273,6 +278,18 @@ def push(title: str, text: str):
             chat = os.environ.get("TG_CHAT_ID", "")
             r = SESSION.post(url, json={"chat_id": chat,
                                         "text": f"{title}\n{text}"}, timeout=15)
+        elif "open.feishu.cn" in url:  # 飞书自定义机器人
+            # 签名校验模式: PUSH_WEBHOOK 填 webhook地址?secret=你的签名密钥
+            payload = {"msg_type": "text", "content": {"text": f"{title}\n{text}"}}
+            q = parse_qs(urlparse(url).query)
+            if q.get("secret"):
+                ts = str(int(time.time()))
+                sign = base64.b64encode(hmac.new(
+                    f"{ts}\n{q['secret'][0]}".encode(), b"",
+                    hashlib.sha256).digest()).decode()
+                payload["timestamp"] = ts
+                payload["sign"] = sign
+            r = SESSION.post(url.split("?")[0], json=payload, timeout=15)
         else:
             r = SESSION.post(url, json={"title": title, "content": text}, timeout=15)
         print(f"[PUSH] {r.status_code} {r.text[:120]}")
