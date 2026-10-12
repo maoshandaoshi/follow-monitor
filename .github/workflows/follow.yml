@@ -59,7 +59,7 @@ jobs:
       - name: Market session (poll loop)
         if: github.event_name != 'workflow_dispatch'
         env:
-          LOOP_INTERVAL: "300"
+          LOOP_INTERVAL: "90"
           LOOP_MAX_HOURS: "5"
           USMART_PHONE:       ${{ secrets.USMART_PHONE }}
           USMART_PASSWORD:    ${{ secrets.USMART_PASSWORD }}
