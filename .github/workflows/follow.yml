@@ -55,7 +55,7 @@ jobs:
           python follow_action.py
           python alpaca_trade.py
 
-      # 定时 / push 触发: 盘中长会话, 内部每 5 分钟轮询 + 自动交易
+      # 定时 / push 触发: 盘中长会话, 内部每 90 秒轮询 + 自动交易
       - name: Market session (poll loop)
         if: github.event_name != 'workflow_dispatch'
         env:
