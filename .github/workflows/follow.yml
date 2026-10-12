@@ -15,14 +15,14 @@ on:
 permissions:
   contents: write             # 允许把状态 commit 回仓库
 
-concurrency:
-  group: usmart-follow-monitor
-  cancel-in-progress: false   # 会话串行, 绝不并发下单
-
 jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 355      # 会话最长 5h + 余量 (GitHub 单任务上限 6h)
+    concurrency:
+      # 长会话串行(绝不并发下单); 手动查询走独立组, 不会被盘中会话堵住
+      group: ${{ github.event_name == 'workflow_dispatch' && 'usmart-follow-query' || 'usmart-follow-monitor' }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -33,11 +33,14 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # 手动 Run workflow: 单次查询, 只推送状态, 不交易
+      # 手动 Run workflow: 单次查询, 只推送状态, 不交易。
+      # DATA_DIR 指向临时目录: 读的是正式状态的副本, 写出的东西不进仓库,
+      # 因此哪怕和盘中会话同时跑也不会互相覆盖状态。
       - name: Manual query (one-shot)
         if: github.event_name == 'workflow_dispatch'
         env:
           MANUAL: "true"
+          DATA_DIR: /tmp/qdata
           USMART_PHONE:       ${{ secrets.USMART_PHONE }}
           USMART_PASSWORD:    ${{ secrets.USMART_PASSWORD }}
           USMART_PUBLIC_KEY:  ${{ secrets.USMART_PUBLIC_KEY }}
@@ -48,6 +51,7 @@ jobs:
           PUSH_WEBHOOK_FEISHU: ${{ secrets.PUSH_WEBHOOK_FEISHU }}
           TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
         run: |
+          rm -rf /tmp/qdata && (cp -r data /tmp/qdata 2>/dev/null || mkdir -p /tmp/qdata)
           python follow_action.py
           python alpaca_trade.py
 
@@ -69,7 +73,7 @@ jobs:
         run: python session.py
 
       - name: Commit state changes
-        if: always()
+        if: always() && github.event_name != 'workflow_dispatch'
         run: |
           git config user.name  "follow-bot"
           git config user.email "actions@users.noreply.github.com"
