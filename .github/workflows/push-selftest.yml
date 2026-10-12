@@ -1,0 +1,44 @@
+name: push-selftest
+
+# 推送通道自检: 手动触发, 立刻往所有已配置的渠道各发一条测试消息。
+# 用途: 换 webhook / 改渠道后确认配置是否真的生效(不涉及交易, 独立并发组, 不会被会话阻塞)。
+on:
+  workflow_dispatch: {}
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Send test push to every configured channel
+        env:
+          PUSH_WEBHOOK:        ${{ secrets.PUSH_WEBHOOK }}
+          PUSH_WEBHOOK_FEISHU: ${{ secrets.PUSH_WEBHOOK_FEISHU }}
+          TG_CHAT_ID:          ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, ".")
+          import follow_action as m
+
+          urls = m.webhook_urls()
+          print(f"[SELFTEST] 解析到 {len(urls)} 个推送通道:")
+          for u in urls:
+              from urllib.parse import urlparse
+              print("   -", urlparse(u).netloc)
+
+          if not urls:
+              print("[SELFTEST] 未配置任何推送地址 (PUSH_WEBHOOK / PUSH_WEBHOOK_FEISHU 均为空)")
+              sys.exit(0)
+
+          m.push("推送通道自检", "企业微信 + 飞书 双通道自检, 收到即代表配置生效。")
+          PY
