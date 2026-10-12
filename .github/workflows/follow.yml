@@ -78,5 +78,7 @@ jobs:
             echo "no state change, skip commit"
           else
             git commit -m "auto: snapshot update $(date -u +'%F %T')"
-            git push || (git pull --rebase && git push)
+            git push \
+              || { git pull --rebase --autostash && git push; } \
+              || { git rebase --abort 2>/dev/null || true; git pull --no-rebase --no-edit -X ours && git push; }
           fi

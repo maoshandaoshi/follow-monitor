@@ -49,20 +49,31 @@ def run_step(script: str):
         print(f"[WARN] {script} 异常: {type(e).__name__}: {e}")
 
 
+def _git(*args) -> int:
+    return subprocess.run(["git", *args], check=False).returncode
+
+
 def commit_state(round_no: int):
     """把 data/ 下的状态提交回仓库, 保证异常中断也不丢状态"""
-    subprocess.run(["git", "config", "user.name", "follow-bot"], check=False)
-    subprocess.run(["git", "config", "user.email",
-                    "actions@users.noreply.github.com"], check=False)
-    subprocess.run(["git", "add", "-A", "data"], check=False)
-    if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
-        subprocess.run(["git", "commit", "-m",
-                        f"auto: session snapshot (round {round_no})"], check=False)
-        for _ in range(3):
-            if subprocess.run(["git", "push"]).returncode == 0:
-                print("[GIT] 状态已提交回仓库")
-                break
-            time.sleep(5)
+    _git("config", "user.name", "follow-bot")
+    _git("config", "user.email", "actions@users.noreply.github.com")
+    _git("add", "-A", "data")
+    if _git("diff", "--cached", "--quiet") == 0:
+        return
+    _git("commit", "-m", f"auto: session snapshot (round {round_no})")
+    for attempt in range(3):
+        if _git("push") == 0:
+            print("[GIT] 状态已提交回仓库")
+            return
+        # 远端有新提交(例如刚推过代码)会让 push 被拒 —— 先合并再重试,
+        # 否则本会话后续所有轮次的状态都会滞留不上去。
+        print(f"[GIT] push 被拒(第 {attempt+1} 次), 与远端合并后重试 ...")
+        if _git("pull", "--rebase", "--autostash") != 0:
+            _git("rebase", "--abort")
+            # 冲突时以会话本机状态为准(它是唯一在交易的进程)
+            _git("pull", "--no-rebase", "--no-edit", "-X", "ours")
+        time.sleep(3)
+    print("[GIT] 状态仍未能推送, 将在会话结束时重试")
 
 
 def main():
@@ -87,7 +98,13 @@ def main():
                     continue
                 print("[SESSION] 等待后仍未开盘, 退出")
                 break
-            print(f"[SESSION] 已收盘, 退出 ({now:%F %H:%M} NY)")
+            # 已收盘(工作日): 补跑最后一轮 —— 让"收盘对战日报"发得出去。
+            # (交易脚本内部按日期去重 last_report, 同一天不会重复推送)
+            print(f"[SESSION] 已收盘, 补跑一轮收盘日报后退出 ({now:%F %H:%M} NY)")
+            rnd += 1
+            run_step("follow_action.py")
+            run_step("alpaca_trade.py")
+            commit_state(rnd)
             break
 
         rnd += 1

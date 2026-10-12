@@ -20,9 +20,11 @@ Alpaca 镜像跟单执行器 (paper)
   - 订单金额 > 该股 30 日均成交额(ADV) 10% 的票跳过并推送告警(每票每天一次)
   - 不做空: 卖出量以实际持仓为上限
 
-收益率对战 (从 Alpaca 第一次调仓开始计时):
-  - 跟投易基准 = 当轮 total_asset; Alpaca 基准 = 当时 equity
-  - 每日收盘推送双方收益率对比 + 执行滑点统计
+收益率对战:
+  - **起点 = 第一次"可执行的"镜像调仓那一轮**(盘中、非手动), 同一轮同一时刻
+    取 跟投易 total_asset 与 Alpaca equity 作为双方基准 —— 起点这一刻两边
+    收益率必然都是 0.00%; 收盘/周末/手动查询不会误启基线。
+  - 之后 收益率 = 当前数额 / 起点数额 - 1, 每日收盘推送对比 + 执行滑点统计
   - 滑点 = (到达价-成交价)/到达价 (买) —— 正值 = 买得比信号到达时便宜
 
 环境变量:
@@ -407,15 +409,22 @@ def collect_fills(st: dict, now_ny):
 
 # ---------------- 报告 ----------------
 def race_lines(st: dict, latest: dict, equity: float) -> list:
-    if not st.get("race"):
-        return ["(对战未开始: 等 Alpaca 第一次镜像调仓)"]
-    r = st["race"]
-    fr = latest.get("total_asset", 0) / r["follow_base"] - 1 if r["follow_base"] else 0
-    ar = equity / r["alpaca_base"] - 1 if r["alpaca_base"] else 0
+    """对战对比: 起点数额 -> 当前数额 -> 收益率 (两边都从同一个时刻起算)"""
+    r = st.get("race")
+    if not r:
+        return ["(对战未开始: 等第一次可执行的镜像调仓)"]
+    fb = float(r.get("follow_base") or 0)
+    ab = float(r.get("alpaca_base") or 0)
+    cur_f = float(latest.get("total_asset") or 0)
+    fr = (cur_f / fb - 1) if (fb > 0 and cur_f > 0) else 0.0
+    ar = (equity / ab - 1) if (ab > 0 and equity > 0) else 0.0
     lead = ar - fr
-    return [f"跟投易 {fr*100:+.2f}%  vs  Alpaca {ar*100:+.2f}%",
-            f"{'Alpaca 领先' if lead >= 0 else '跟投易领先'} {abs(lead)*100:.2f} pt",
-            f"计时起点: {r['t0']}"]
+    return [f"跟投易 {fb:,.0f} → {cur_f:,.0f}  {fr*100:+.2f}%"
+            if cur_f > 0 else f"跟投易 起点 {fb:,.0f} (本轮无快照)",
+            f"Alpaca  {ab:,.0f} → {equity:,.0f}  {ar*100:+.2f}%"
+            if equity > 0 else f"Alpaca 起点 {ab:,.0f} (无权益)",
+            f"{'Alpaca' if lead >= 0 else '跟投易'} 领先 {abs(lead)*100:.2f} pt"
+            f"   起点 {r.get('t0', '')}"]
 
 
 def exec_lines(st: dict) -> list:
@@ -455,6 +464,7 @@ def main():
           f"positions={len(held)}")
 
     # 1) 新调仓信号 -> 固定目标 (用信号时刻的权重与权益, 防止行情漂移导致的反复交易)
+    sig_text = None
     if (latest.get("rebalance")
             and latest.get("ts") != st.get("target_src_ts")
             and latest.get("weights")):
@@ -469,26 +479,38 @@ def main():
             px = q.get("mid") if q.get("ok") else 0
             st["arrival"][sym] = px
             st["desired_qty"][sym] = int(equity * w / 100 / px) if px > 0 else 0
-        if not st.get("race"):
-            st["race"] = {"t0": f"{now_ny:%F %H:%M} NY",
-                          "follow_base": latest.get("total_asset") or 0,
-                          "alpaca_base": equity}
-            print(f"[RACE] 对战开始: follow_base="
-                  f"{st['race']['follow_base']:,.0f} alpaca_base={equity:,.0f}")
-        push("开始镜像调仓",
-             "\n".join([f"{s} {w}%" for s, w in sorted(weights.items())]
-                      or ["(空仓)"]) +
-             f"\n目标权益 ${equity:,.0f}")
+        sig_text = ("\n".join([f"{s} {w}%" for s, w in sorted(weights.items())]
+                              or ["(空仓)"])
+                    + f"\n目标权益 ${equity:,.0f}")
         print(f"[TARGET] {st['desired_qty']}")
 
     # 2) 执行 (仅盘中且非手动)
     if st["targets"] and open_now and not MANUAL:
         execute(st, now_ny, equity)
 
-    # 3) 成交统计
+    # 3) 对战起点: 第一次"可执行"的镜像调仓 —— 同一轮、同一时刻取双方数额,
+    #    所以起点这一刻两边收益率必然都是 0.00%。
+    #    收盘/周末/手动查询都不会误启(原来周末测试跑一次就把基线写死了,
+    #    导致第一次真调仓时两边起点对不齐)。
+    seeded = False
+    if open_now and not MANUAL and st.get("target_src_ts") and not st.get("race"):
+        st["race"] = {"t0": f"{now_ny:%F %H:%M} NY",
+                      "follow_base": float(latest.get("total_asset") or 0),
+                      "alpaca_base": equity,
+                      "follow_src": str(latest.get("ts") or "")}
+        seeded = True
+        print(f"[RACE] 对战起点: 跟投易 {st['race']['follow_base']:,.2f}  "
+              f"Alpaca {st['race']['alpaca_base']:,.2f}  (双方均为 0.00%)")
+
+    # 4) 新调仓信号推送 (起跑当轮带上 0.00% / 0.00% 的起点)
+    if sig_text:
+        tail = ("\n" + "\n".join(race_lines(st, latest, equity))) if seeded else ""
+        push("开始镜像调仓", sig_text + tail)
+
+    # 5) 成交统计
     collect_fills(st, now_ny)
 
-    # 4) 对战记录与推送
+    # 6) 对战记录与推送
     today = f"{now_ny:%F}"
     if MANUAL:
         push("Alpaca 状态",
