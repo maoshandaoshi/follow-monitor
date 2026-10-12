@@ -25,9 +25,9 @@
   "alpaca_base": 100000.0
  },
  "exec": {
-  "fills": 0,
-  "buy_notional": 0,
-  "buy_slip": 0,
+  "fills": 4,
+  "buy_notional": 89084.840064,
+  "buy_slip": 15.002365347779772,
   "sell_notional": 0,
   "sell_slip": 0
  },
