@@ -26,11 +26,11 @@
   "follow_src": "2026-10-12 10:33:06"
  },
  "exec": {
-  "fills": 212,
-  "buy_notional": 2163132.5814720034,
-  "buy_slip": -9339.510255607993,
-  "sell_notional": 989.21,
-  "sell_slip": -0.8033858577899474
+  "fills": 222,
+  "buy_notional": 2257421.4215360032,
+  "buy_slip": -9764.722429151352,
+  "sell_notional": 1039.94,
+  "sell_slip": -0.8433051014377665
  },
  "warned": {},
  "last_report": "2026-10-10",
