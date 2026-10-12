@@ -27,7 +27,8 @@ Alpaca 镜像跟单执行器 (paper)
 
 环境变量:
   ALPACA_KEY_ID / ALPACA_SECRET   Alpaca paper 凭证 (必须)
-  PUSH_WEBHOOK                   推送地址 (可选)
+  PUSH_WEBHOOK                   推送地址 (可选, 多个用 英文逗号/分号/换行 分隔)
+  PUSH_WEBHOOK_FEISHU            飞书机器人地址 (可选, 与 PUSH_WEBHOOK 并存)
   MANUAL=1                       手动模式: 只报告状态, 不交易
 """
 import base64
@@ -35,6 +36,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -78,43 +80,68 @@ def market_open(now_ny) -> bool:
     return 9 * 60 + 30 <= t < 16 * 60
 
 
+def webhook_urls() -> list:
+    """收集所有推送地址, 支持多渠道并存。
+
+    来源1: PUSH_WEBHOOK            (可用 英文逗号/分号/空格/换行 分隔多个地址)
+    来源2: PUSH_WEBHOOK_FEISHU     (飞书机器人专用, 与上面互不影响)
+    """
+    blobs = [PUSH_WEBHOOK, os.environ.get("PUSH_WEBHOOK_FEISHU", "").strip()]
+    urls = []
+    for blob in blobs:
+        if not blob:
+            continue
+        for u in re.split(r"[,;\s]+", blob):
+            u = u.strip()
+            if u and u not in urls:
+                urls.append(u)
+    return urls
+
+
+def _push_one(url: str, title: str, text: str):
+    if "sctapi.ftqq.com" in url:  # Server酱
+        r = SESSION.post(url, json={"title": title, "desp": text}, timeout=15)
+    elif "qyapi.weixin.qq.com" in url:  # 企业微信群机器人
+        r = SESSION.post(url, json={"msgtype": "markdown",
+                                    "markdown": {"content": f"**{title}**\n{text}"}},
+                         timeout=15)
+    elif "oapi.dingtalk.com" in url:  # 钉钉群机器人
+        r = SESSION.post(url, json={"msgtype": "markdown",
+                                   "markdown": {"title": title, "text": text}},
+                         timeout=15)
+    elif "api.telegram.org" in url:  # Telegram Bot
+        chat = os.environ.get("TG_CHAT_ID", "")
+        r = SESSION.post(url, json={"chat_id": chat,
+                                    "text": f"{title}\n{text}"}, timeout=15)
+    elif "open.feishu.cn" in url:  # 飞书自定义机器人
+        # 签名校验模式: 地址填 webhook地址?secret=你的签名密钥
+        payload = {"msg_type": "text", "content": {"text": f"{title}\n{text}"}}
+        q = parse_qs(urlparse(url).query)
+        if q.get("secret"):
+            ts = str(int(time.time()))
+            sign = base64.b64encode(hmac.new(
+                f"{ts}\n{q['secret'][0]}".encode(), b"",
+                hashlib.sha256).digest()).decode()
+            payload["timestamp"] = ts
+            payload["sign"] = sign
+        r = SESSION.post(url.split("?")[0], json=payload, timeout=15)
+    else:
+        r = SESSION.post(url, json={"title": title, "content": text}, timeout=15)
+    return r
+
+
 def push(title: str, text: str):
-    if not PUSH_WEBHOOK:
+    urls = webhook_urls()
+    if not urls:
         print(f"[PUSH-DISABLED] {title}\n{text}")
         return
-    try:
-        url = PUSH_WEBHOOK
-        if "sctapi.ftqq.com" in url:  # Server酱
-            r = SESSION.post(url, json={"title": title, "desp": text}, timeout=15)
-        elif "qyapi.weixin.qq.com" in url:  # 企业微信群机器人
-            r = SESSION.post(url, json={"msgtype": "markdown",
-                                        "markdown": {"content": f"**{title}**\n{text}"}},
-                             timeout=15)
-        elif "oapi.dingtalk.com" in url:  # 钉钉群机器人
-            r = SESSION.post(url, json={"msgtype": "markdown",
-                                       "markdown": {"title": title, "text": text}},
-                             timeout=15)
-        elif "api.telegram.org" in url:  # Telegram Bot
-            chat = os.environ.get("TG_CHAT_ID", "")
-            r = SESSION.post(url, json={"chat_id": chat,
-                                        "text": f"{title}\n{text}"}, timeout=15)
-        elif "open.feishu.cn" in url:  # 飞书自定义机器人
-            # 签名校验模式: PUSH_WEBHOOK 填 webhook地址?secret=你的签名密钥
-            payload = {"msg_type": "text", "content": {"text": f"{title}\n{text}"}}
-            q = parse_qs(urlparse(url).query)
-            if q.get("secret"):
-                ts = str(int(time.time()))
-                sign = base64.b64encode(hmac.new(
-                    f"{ts}\n{q['secret'][0]}".encode(), b"",
-                    hashlib.sha256).digest()).decode()
-                payload["timestamp"] = ts
-                payload["sign"] = sign
-            r = SESSION.post(url.split("?")[0], json=payload, timeout=15)
-        else:
-            r = SESSION.post(url, json={"title": title, "content": text}, timeout=15)
-        print(f"[PUSH] {r.status_code} {r.text[:100]}")
-    except Exception as e:
-        print(f"[PUSH-ERROR] {type(e).__name__}: {e}")
+    for url in urls:
+        host = urlparse(url).netloc or url[:30]
+        try:
+            r = _push_one(url, title, text)
+            print(f"[PUSH -> {host}] {r.status_code} {r.text[:100]}")
+        except Exception as e:
+            print(f"[PUSH-ERROR -> {host}] {type(e).__name__}: {e}")
 
 
 # ---------------- Alpaca API ----------------

@@ -45,6 +45,7 @@ jobs:
           ALPACA_KEY_ID:      ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET:      ${{ secrets.ALPACA_SECRET }}
           PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
+          PUSH_WEBHOOK_FEISHU: ${{ secrets.PUSH_WEBHOOK_FEISHU }}
           TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
         run: |
           python follow_action.py
@@ -63,6 +64,7 @@ jobs:
           ALPACA_KEY_ID:      ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET:      ${{ secrets.ALPACA_SECRET }}
           PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
+          PUSH_WEBHOOK_FEISHU: ${{ secrets.PUSH_WEBHOOK_FEISHU }}
           TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
         run: python session.py
 
