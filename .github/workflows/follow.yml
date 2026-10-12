@@ -2,25 +2,27 @@ name: usmart-follow-monitor
 
 on:
   schedule:
-    # 美股盘中(覆盖夏/冬令时, 脚本内部再精确判断纽约时间): 每 5 分钟
-    - cron: "*/5 13-21 * * 1-5"
-    # 每周日 14:00(北京时间) 保活+周报: 防止 60 天无活动被 GitHub 自动停用
+    # 会话启动器: 启动后程序自己在云端连续轮询 5 小时(不依赖 cron 准点)
+    - cron: "30 13 * * 1-5"   # 13:30 UTC = 9:30 纽约开盘(夏令时) 会话1: 覆盖到 18:30
+    - cron: "35 15 * * 1-5"   # 盘中备份: 若会话1 没起来, 从 15:35 起兜底
+    - cron: "30 18 * * 1-5"   # 会话2: 接续会话1, 覆盖最后两小时到收盘
+    # 每周日 14:00(北京时间) 保活: 防止 60 天无活动被 GitHub 自动停用
     - cron: "0 6 * * 0"
-  workflow_dispatch: {}   # 手动触发 = 随时查询, 在 Actions 页面点 Run workflow
+  workflow_dispatch: {}       # 手动触发 = 随时查询(只查询, 不下单)
+  push:
+    branches: [main]          # 代码更新后自动起一段会话, 立即生效
 
 permissions:
-  contents: write          # 允许把状态 commit 回仓库
+  contents: write             # 允许把状态 commit 回仓库
 
 concurrency:
   group: usmart-follow-monitor
-  cancel-in-progress: false
+  cancel-in-progress: false   # 会话串行, 绝不并发下单
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      MANUAL: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * 0' }}
+    timeout-minutes: 355      # 会话最长 5h + 余量 (GitHub 单任务上限 6h)
     steps:
       - uses: actions/checkout@v4
 
@@ -31,24 +33,41 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Run monitor
+      # 手动 Run workflow: 单次查询, 只推送状态, 不交易
+      - name: Manual query (one-shot)
+        if: github.event_name == 'workflow_dispatch'
         env:
+          MANUAL: "true"
           USMART_PHONE:       ${{ secrets.USMART_PHONE }}
           USMART_PASSWORD:    ${{ secrets.USMART_PASSWORD }}
           USMART_PUBLIC_KEY:  ${{ secrets.USMART_PUBLIC_KEY }}
           USMART_PRIVATE_KEY: ${{ secrets.USMART_PRIVATE_KEY }}
-          PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
-          TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
-        run: python follow_action.py
-
-      - name: Run alpaca mirror trader
-        env:
-          ALPACA_KEY_ID:     ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_KEY_ID:      ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET:      ${{ secrets.ALPACA_SECRET }}
           PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
-        run: python alpaca_trade.py
+          TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python follow_action.py
+          python alpaca_trade.py
+
+      # 定时 / push 触发: 盘中长会话, 内部每 5 分钟轮询 + 自动交易
+      - name: Market session (poll loop)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          LOOP_INTERVAL: "300"
+          LOOP_MAX_HOURS: "5"
+          USMART_PHONE:       ${{ secrets.USMART_PHONE }}
+          USMART_PASSWORD:    ${{ secrets.USMART_PASSWORD }}
+          USMART_PUBLIC_KEY:  ${{ secrets.USMART_PUBLIC_KEY }}
+          USMART_PRIVATE_KEY: ${{ secrets.USMART_PRIVATE_KEY }}
+          ALPACA_KEY_ID:      ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET:      ${{ secrets.ALPACA_SECRET }}
+          PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
+          TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
+        run: python session.py
 
       - name: Commit state changes
+        if: always()
         run: |
           git config user.name  "follow-bot"
           git config user.email "actions@users.noreply.github.com"
@@ -57,5 +76,5 @@ jobs:
             echo "no state change, skip commit"
           else
             git commit -m "auto: snapshot update $(date -u +'%F %T')"
-            git push
+            git push || (git pull --rebase && git push)
           fi
