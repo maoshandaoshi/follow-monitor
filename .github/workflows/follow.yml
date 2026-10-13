@@ -3,10 +3,12 @@ name: usmart-follow-monitor
 on:
   schedule:
     # 会话启动器: 启动后程序自己在云端连续轮询 5 小时(不依赖 cron 准点)
-    - cron: "30 13 * * 1-5"   # 13:30 UTC = 9:30 纽约开盘(夏令时) 会话1: 覆盖到 18:30
-    - cron: "35 15 * * 1-5"   # 盘中备份: 若会话1 没起来, 从 15:35 起兜底
-    - cron: "30 18 * * 1-5"   # 会话2: 接续会话1, 覆盖最后两小时到收盘
-    # 每周日 14:00(北京时间) 保活: 防止 60 天无活动被 GitHub 自动停用
+    - cron: "30 13 * * 1-5"   # 13:30 UTC = 9:30 纽约开盘(夏令时) 主启动
+    # 兜底班次: GitHub 的 schedule cron 在高峰时段会延迟甚至整班丢失
+    # (2026-10-13 13:30 那班就没触发, 导致全天无监控)。
+    # 每 20 分钟检查一次: 没有活着的会话就启动, 有就秒退, 保证监控不真空。
+    - cron: "*/20 13-19 * * 1-5"
+    # 每周日 06:00 UTC 保活: 防止 60 天无活动被 GitHub 自动停用
     - cron: "0 6 * * 0"
   workflow_dispatch: {}       # 手动触发 = 随时查询(只查询, 不下单)
   push:
@@ -70,7 +72,57 @@ jobs:
           PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
           PUSH_WEBHOOK_FEISHU: ${{ secrets.PUSH_WEBHOOK_FEISHU }}
           TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
-        run: python session.py
+        run: |
+          # ---- 周日保活 cron: 只需要仓库有活动, 不启动会话 ----
+          if [ "${{ github.event.schedule }}" = "0 6 * * 0" ]; then
+            git config user.name  "follow-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git commit --allow-empty -m "chore: weekly keepalive" \
+              && git push -q origin HEAD:main || echo "[KEEPALIVE] nothing to push"
+            exit 0
+          fi
+          # ---- 启动前自检: 避免重复/无效启动 ----
+          # 退出码约定: 42 = 跳过(已有会话在跑/刚跑完/不在纽约时段), 其他 = 继续
+          python3 - <<'PYEOF'
+          import json, subprocess, sys
+          from datetime import datetime, timezone, timedelta
+          from zoneinfo import ZoneInfo
+          try:
+              me = ${{ github.run_id }}
+              out = subprocess.run(
+                  ["gh", "run", "list", "--repo", "maoshandaoshi/follow-monitor",
+                   "--workflow", "follow.yml", "--limit", "25",
+                   "--json", "databaseId,status,updatedAt"],
+                  capture_output=True, text=True, timeout=30).stdout
+              now = datetime.now(timezone.utc)
+              for r in json.loads(out):
+                  if r["databaseId"] == me:
+                      continue
+                  if r["status"] in ("in_progress", "queued"):
+                      print("[GUARD] skip: run %s is %s" % (r["databaseId"], r["status"]))
+                      sys.exit(42)
+                  if r["status"] == "completed":
+                      t = datetime.fromisoformat(r["updatedAt"].replace("Z", "+00:00"))
+                      if now - t < timedelta(minutes=10):
+                          print("[GUARD] skip: run %s finished %ds ago"
+                              % (r["databaseId"], int((now - t).total_seconds())))
+                          sys.exit(42)
+              ny = datetime.now(ZoneInfo("America/New_York"))
+              if not (8 <= ny.hour < 21):
+                  print("[GUARD] skip: outside NY window (%s)" % ny.strftime("%H:%M %Z"))
+                  sys.exit(42)
+              print("[GUARD] ok: no active session, NY %s -> starting"
+                      % ny.strftime("%H:%M %Z"))
+          except SystemExit:
+              raise
+          except Exception as e:
+              # 查询失败时保守放行: 会话内部幂等(挂单对账+client_order_id),
+              # 重复启动最坏只是排队, 好过因误判丢掉监控
+              print("[GUARD] check failed (%s), proceeding anyway" % e)
+          PYEOF
+          rc=$?
+          if [ "$rc" = "42" ]; then echo "[GUARD] start skipped"; exit 0; fi
+          python session.py
 
       - name: Commit state changes
         if: always() && github.event_name != 'workflow_dispatch'
