@@ -301,68 +301,137 @@ def price_for(side: str, q: dict, arrival: float, elapsed_min: float) -> float:
     return round(px, 2)
 
 
+def cancel_and_confirm(sym: str, wait_s: float = 4.0) -> str:
+    """撤掉 sym 全部挂单并**确认生效**后再返回。
+    返回:
+      'cancelled'  挂单已全部撤掉, 可以安全挂新单
+      'filled'     有单在撤销前/撤销中成交(部分或全部), 需下轮重新对账
+      'failed'     超时仍挂着, 保守起见本轮不挂新单
+    竞态背景: 旧单挂在盘口排队, 撤单请求到达时它可能刚好成交,
+    此时 Alpaca 撤单返回 404/422, 若忽略结果直接挂新单就会双重成交
+    (2026-10-13 PDD 因此被买 3 次: 83.50/83.57/83.67 各 228 股)。
+    """
+    mine = [o for o in open_orders() if o.get("symbol") == sym]
+    if not mine:
+        return "cancelled"
+    cancel_symbol(sym)
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        left = [o for o in open_orders() if o.get("symbol") == sym]
+        if not left:
+            return "cancelled"
+        if any(float(o.get("filled_qty") or 0) > 0 for o in left):
+            return "filled"
+        time.sleep(0.5)
+    for o in open_orders():
+        if o.get("symbol") == sym and float(o.get("filled_qty") or 0) > 0:
+            return "filled"
+    return "failed"
+
+
+def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
+               now_ny, equity: float):
+    """把 sym 对齐到 desired 股。含撤单确认 + 挂单前复查, 保证不会重复下单。"""
+    cur = held.get(sym, 0)
+    remaining = desired - cur
+    if remaining == 0:
+        if sym in oo:
+            res = cancel_and_confirm(sym)
+            print(f"[CANCEL] {sym} 已到位({cur}), 撤残余挂单 -> {res}")
+        return
+
+    q = quote_of(sym)
+    if not q["ok"]:
+        print(f"[SKIP] {sym}: 无有效报价")
+        return
+    mid, spread = q["mid"], (q["ask"] - q["bid"]) / max(q["mid"], 1e-9)
+    if spread > MAX_SPREAD:
+        _warn_once(st, sym, f"{sym} 盘口价差 {spread*100:.1f}% 过大, 本轮跳过")
+        return
+
+    side = "buy" if remaining > 0 else "sell"
+    qty = abs(remaining)
+    if side == "sell":
+        qty = min(qty, max(cur, 0))    # 不做空
+        if qty == 0:
+            return
+    notional = qty * q["mid"]
+
+    adv = adv_dollars(sym)
+    if adv > 0 and notional > adv * MAX_ADV_PART:
+        _warn_once(st, sym, f"{sym} 订单金额 ${notional:,.0f} 超过其30日均"
+                            f"成交额的10% (${adv:,.0f}), 跳过")
+        return
+
+    arrival = st["arrival"].get(sym) or q["mid"]
+    st["arrival"].setdefault(sym, q["mid"])
+    px = price_for(side, q, arrival, elapsed_min(now_ny, st))
+    if px <= 0:
+        return
+
+    exist = oo.get(sym)
+    if exist and exist.get("side") == side:
+        old_px = float(exist.get("limit_price") or 0)
+        if old_px > 0 and abs(old_px - px) / old_px < REPLACE_EPS:
+            print(f"[KEEP] {sym} 挂单 {old_px} 仍有效")
+            return
+    if exist:
+        res = cancel_and_confirm(sym)
+        if res != "cancelled":
+            # 旧单成交中/撤不掉: 绝不叠加新单, 交给下一轮重新对账
+            print(f"[EXEC] {sym} 旧单撤销结果={res}, 本轮不挂新单")
+            return
+
+    # ---- 挂单前最终复查: 撤单窗口内行情/持仓可能已变 ----
+    held_now = positions_map()
+    oo_now = {o["symbol"] for o in open_orders() if o.get("status") == "open"}
+    if sym in oo_now:
+        print(f"[EXEC] {sym} 撤单后仍有挂单存在, 本轮跳过")
+        return
+    cur_now = held_now.get(sym, 0)
+    remaining_now = desired - cur_now
+    if remaining_now == 0:
+        print(f"[EXEC] {sym} 撤单期间已对齐({cur_now}), 无需再挂")
+        return
+    if (remaining_now > 0) != (remaining > 0):
+        print(f"[EXEC] {sym} 撤单期间方向反转({remaining:+d}->{remaining_now:+d}), "
+              f"本轮跳过")
+        return
+    qty = min(abs(remaining_now),
+              max(cur_now, 0) if side == "sell" else abs(remaining_now))
+    if qty <= 0:
+        return
+    place_limit(sym, side, qty, px)
+    print(f"[EXEC] {sym} 目标{desired} 现持{cur_now} 余{remaining_now:+d}"
+          f" {side} {qty} @ {px} (arrival={arrival:.2f})")
+
+
+def elapsed_min(now_ny, st: dict) -> float:
+    try:
+        target_dt = datetime.fromisoformat(st["target_ts"])
+        return (now_ny - target_dt).total_seconds() / 60
+    except Exception:
+        return 0.0
+
+
 def execute(st: dict, now_ny, equity: float):
     targets = st["targets"]
     if not targets:
         return
-    target_dt = datetime.fromisoformat(st["target_ts"])
-    elapsed = (now_ny - target_dt).total_seconds() / 60
     held = positions_map()
     oo = {o["symbol"]: o for o in open_orders() if o.get("status") == "open"}
-    print(f"[EXEC] elapsed={elapsed:.0f}min targets={len(targets)} "
-          f"open_orders={len(oo)}")
+    print(f"[EXEC] elapsed={elapsed_min(now_ny, st):.0f}min "
+          f"targets={len(targets)} held={len(held)} open_orders={len(oo)}")
 
-    for sym, w in sorted(targets.items()):
-        desired = st["desired_qty"].get(sym, 0)
-        if desired <= 0:
-            continue
-        cur = held.get(sym, 0)
-        remaining = desired - cur
-        if remaining == 0:
-            if sym in oo:
-                cancel_symbol(sym)     # 已到位, 撤掉残余挂单
-            continue
+    # 待处理清单 = 目标内股票 + 已持仓但不在目标里的股票(跟投清仓了的, 必须同步清仓)
+    work = {sym: st["desired_qty"].get(sym, 0) for sym in targets}
+    for sym in held:
+        if sym not in targets:
+            work[sym] = 0
+            print(f"[CLEANUP] {sym} 不在跟投目标中, 计划清仓 {held[sym]} 股")
 
-        q = quote_of(sym)
-        if not q["ok"]:
-            print(f"[SKIP] {sym}: 无有效报价")
-            continue
-        mid, spread = q["mid"], (q["ask"] - q["bid"]) / max(q["mid"], 1e-9)
-        if spread > MAX_SPREAD:
-            _warn_once(st, sym, f"{sym} 盘口价差 {spread*100:.1f}% 过大, 本轮跳过")
-            continue
-
-        side = "buy" if remaining > 0 else "sell"
-        qty = abs(remaining)
-        if side == "sell":
-            qty = min(qty, max(cur, 0))    # 不做空
-            if qty == 0:
-                continue
-        notional = qty * q["mid"]
-
-        adv = adv_dollars(sym)
-        if adv > 0 and notional > adv * MAX_ADV_PART:
-            _warn_once(st, sym, f"{sym} 订单金额 ${notional:,.0f} 超过其30日均"
-                                f"成交额的10% (${adv:,.0f}), 跳过")
-            continue
-
-        arrival = st["arrival"].get(sym) or q["mid"]
-        st["arrival"].setdefault(sym, q["mid"])
-        px = price_for(side, q, arrival, elapsed)
-        if px <= 0:
-            continue
-
-        exist = oo.get(sym)
-        if exist and exist.get("side") == side:
-            old_px = float(exist.get("limit_price") or 0)
-            if old_px > 0 and abs(old_px - px) / old_px < REPLACE_EPS:
-                print(f"[KEEP] {sym} 挂单 {old_px} 仍有效")
-                continue
-        if exist:
-            cancel_symbol(sym)
-        place_limit(sym, side, qty, px)
-        print(f"[EXEC] {sym} w={w}% 目标{desired} 现持{cur} 余{remaining:+d}"
-              f" {side} {qty} @ {px} (arrival={arrival:.2f} elapsed={elapsed:.0f}m)")
+    for sym in sorted(work):
+        _order_one(st, sym, work[sym], held, oo, now_ny, equity)
 
 
 def _warn_once(st: dict, sym: str, msg: str):
