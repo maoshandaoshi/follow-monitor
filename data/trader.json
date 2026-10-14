@@ -39,7 +39,9 @@
  },
  "warned": {
   "LMT:2026-10-14": true,
-  "TEM:2026-10-14": true
+  "TEM:2026-10-14": true,
+  "CRCL:2026-10-14": true,
+  "CRL:2026-10-14": true
  },
  "last_report": "2026-10-14",
  "last_fill_check": "2026-10-14T00:00:00Z"
