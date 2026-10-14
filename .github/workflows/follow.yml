@@ -5,7 +5,7 @@ on:
     # 会话启动器: 启动后程序自己在云端连续轮询 5 小时(不依赖 cron 准点)
     - cron: "30 13 * * 1-5"   # 13:30 UTC = 9:30 纽约开盘(夏令时) 主启动
     # 兜底班次: GitHub 的 schedule cron 在高峰时段会延迟甚至整班丢失
-    # (2026-10-13 13:30 那班就没触发, 导致全天无监控)。
+    # (2026-10-13 13:30 那班就没触发, 2026-10-14 全天 22 个时点全部丢失)。
     # 每 20 分钟检查一次: 没有活着的会话就启动, 有就秒退, 保证监控不真空。
     - cron: "*/20 13-19 * * 1-5"
     # 每周日 06:00 UTC 保活: 防止 60 天无活动被 GitHub 自动停用
@@ -25,15 +25,40 @@ on:
 
 permissions:
   contents: write             # 允许把状态 commit 回仓库
+  actions: read               # gate job 的守卫需要读 runs 列表
 
 jobs:
-  monitor:
+  # ============================================================
+  # gate: 启动前自检。无并发组, ~15s 完成。
+  # 决定本次触发是否启动会话, 结果通过 outputs 传给 session job。
+  # 守卫脚本 guard.py(仓库根目录) —— 旧版内嵌 heredoc 没有 GH_TOKEN,
+  # gh run list 在 runner 里返回空导致永远 fail-open, 形同虚设。
+  # ============================================================
+  gate:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.mode == 'session'
     runs-on: ubuntu-latest
-    timeout-minutes: 355      # 会话最长 5h + 余量 (GitHub 单任务上限 6h)
+    outputs:
+      start:  ${{ steps.guard.outputs.start }}
+      action: ${{ steps.guard.outputs.action }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: python3 guard.py
+
+  # ============================================================
+  # query: 手动 mode=query。单次查询, 只推送状态, 不交易。
+  # 独立并发组, 不被盘中会话堵住; DATA_DIR 指向临时目录,
+  # 读的是正式状态的副本, 写出的东西不进仓库。
+  # ============================================================
+  query:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'session'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
-      # 长会话串行(绝不并发下单); 手动查询走独立组, 不会被盘中会话堵住
-      # mode=session 的手动触发并入监控组, 与 schedule/push 会话串行
-      group: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'session') && 'usmart-follow-query' || 'usmart-follow-monitor' }}
+      group: usmart-follow-query
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -45,11 +70,7 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # 手动 Run workflow 且 mode=query: 单次查询, 只推送状态, 不交易。
-      # DATA_DIR 指向临时目录: 读的是正式状态的副本, 写出的东西不进仓库,
-      # 因此哪怕和盘中会话同时跑也不会互相覆盖状态。
       - name: Manual query (one-shot)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'session'
         env:
           MANUAL: "true"
           DATA_DIR: /tmp/qdata
@@ -67,9 +88,30 @@ jobs:
           python follow_action.py
           python alpaca_trade.py
 
-      # 定时 / push / 手动 mode=session 触发: 盘中长会话, 内部每 90 秒轮询 + 自动交易
+  # ============================================================
+  # session: 盘中长会话, 内部每 90 秒轮询 + 自动交易。
+  # 需要 gate 放行; gate 崩了也 fail-open 启动(丢监控比重复启动更糟)。
+  # 并发组保证绝不并发下单; 冗余触发在 gate 就秒退, 不会排队堆积。
+  # ============================================================
+  session:
+    needs: gate
+    if: "!cancelled() && (needs.gate.outputs.start == 'true' || needs.gate.result == 'failure')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 355      # 会话最长 5h + 余量 (GitHub 单任务上限 6h)
+    concurrency:
+      group: usmart-follow-monitor
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
       - name: Market session (poll loop)
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.mode == 'session'
         env:
           LOOP_INTERVAL: "90"
           LOOP_MAX_HOURS: "5"
@@ -82,60 +124,10 @@ jobs:
           PUSH_WEBHOOK:       ${{ secrets.PUSH_WEBHOOK }}
           PUSH_WEBHOOK_FEISHU: ${{ secrets.PUSH_WEBHOOK_FEISHU }}
           TG_CHAT_ID:         ${{ secrets.TG_CHAT_ID }}
-        run: |
-          # ---- 周日保活 cron: 只需要仓库有活动, 不启动会话 ----
-          if [ "${{ github.event.schedule }}" = "0 6 * * 0" ]; then
-            git config user.name  "follow-bot"
-            git config user.email "actions@users.noreply.github.com"
-            git commit --allow-empty -m "chore: weekly keepalive" \
-              && git push -q origin HEAD:main || echo "[KEEPALIVE] nothing to push"
-            exit 0
-          fi
-          # ---- 启动前自检: 避免重复/无效启动 ----
-          # 退出码约定: 42 = 跳过(已有会话在跑/刚跑完/不在纽约时段), 其他 = 继续
-          python3 - <<'PYEOF'
-          import json, subprocess, sys
-          from datetime import datetime, timezone, timedelta
-          from zoneinfo import ZoneInfo
-          try:
-              me = ${{ github.run_id }}
-              out = subprocess.run(
-                  ["gh", "run", "list", "--repo", "maoshandaoshi/follow-monitor",
-                   "--workflow", "follow.yml", "--limit", "25",
-                   "--json", "databaseId,status,updatedAt"],
-                  capture_output=True, text=True, timeout=30).stdout
-              now = datetime.now(timezone.utc)
-              for r in json.loads(out):
-                  if r["databaseId"] == me:
-                      continue
-                  if r["status"] in ("in_progress", "queued"):
-                      print("[GUARD] skip: run %s is %s" % (r["databaseId"], r["status"]))
-                      sys.exit(42)
-                  if r["status"] == "completed":
-                      t = datetime.fromisoformat(r["updatedAt"].replace("Z", "+00:00"))
-                      if now - t < timedelta(minutes=10):
-                          print("[GUARD] skip: run %s finished %ds ago"
-                              % (r["databaseId"], int((now - t).total_seconds())))
-                          sys.exit(42)
-              ny = datetime.now(ZoneInfo("America/New_York"))
-              if not (8 <= ny.hour < 21):
-                  print("[GUARD] skip: outside NY window (%s)" % ny.strftime("%H:%M %Z"))
-                  sys.exit(42)
-              print("[GUARD] ok: no active session, NY %s -> starting"
-                      % ny.strftime("%H:%M %Z"))
-          except SystemExit:
-              raise
-          except Exception as e:
-              # 查询失败时保守放行: 会话内部幂等(挂单对账+client_order_id),
-              # 重复启动最坏只是排队, 好过因误判丢掉监控
-              print("[GUARD] check failed (%s), proceeding anyway" % e)
-          PYEOF
-          rc=$?
-          if [ "$rc" = "42" ]; then echo "[GUARD] start skipped"; exit 0; fi
-          python session.py
+        run: python session.py
 
       - name: Commit state changes
-        if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.mode == 'session')
+        if: always()
         run: |
           git config user.name  "follow-bot"
           git config user.email "actions@users.noreply.github.com"
@@ -148,3 +140,19 @@ jobs:
               || { git pull --rebase --autostash && git push; } \
               || { git rebase --abort 2>/dev/null || true; git pull --no-rebase --no-edit -X ours && git push; }
           fi
+
+  # ============================================================
+  # keepalive: 周日保活 cron。只需要仓库有活动, 不启动会话。
+  # ============================================================
+  keepalive:
+    needs: gate
+    if: needs.gate.outputs.action == 'keepalive'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Weekly keepalive commit
+        run: |
+          git config user.name  "follow-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit --allow-empty -m "chore: weekly keepalive" \
+            && git push -q origin HEAD:main || echo "[KEEPALIVE] nothing to push"
