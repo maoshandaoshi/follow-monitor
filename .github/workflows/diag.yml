@@ -41,9 +41,28 @@ jobs:
 
           if mode in ("orders", "both"):
               show("/orders?status=open&limit=50&nested=false", "open")
-              show("/orders?status=all&limit=5&nested=false", "all5")
+              show("/orders?status=all&limit=100&nested=false&after=2026-10-15T12:00:00Z", "today-all")
               show("/orders?status=open&symbols=LMT", "open-LMT")
           if mode in ("positions", "both"):
               show("/positions", "positions")
+          if mode in ("probe", "both"):
+              # 高频轮询: 测 open_orders 端点稳定性(复现盘中 silent failure)
+              import time
+              fails = 0
+              for i in range(20):
+                  try:
+                      req = urllib.request.Request(f"{BASE}/orders?status=open&limit=50", headers=H)
+                      with urllib.request.urlopen(req, timeout=15) as r:
+                          code = r.status
+                          n = len(json.loads(r.read().decode()))
+                  except urllib.error.HTTPError as e:
+                      code, n = e.code, -1
+                  except Exception:
+                      code, n = -1, -1
+                  if code != 200:
+                      fails += 1
+                      print(f"[probe] #{i} HTTP {code} <-- FAIL")
+                  time.sleep(3)
+              print(f"[probe] done: {fails}/20 failures")
           print(f"[env] key_len={len(KEY or '')} sec_len={len(SEC or '')}")
           PYEOF
