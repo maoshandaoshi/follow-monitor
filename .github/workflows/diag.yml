@@ -41,7 +41,15 @@ jobs:
 
           if mode in ("orders", "both"):
               show("/orders?status=open&limit=50&nested=false", "open")
-              show("/orders?status=all&limit=100&nested=false&after=2026-10-15T12:00:00Z", "today-all")
+              # 全量今日订单(不截断)
+              try:
+                  req = urllib.request.Request(f"{BASE}/orders?status=all&limit=100&nested=false&after=2026-10-15T12:00:00Z", headers=H)
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      body = r.read().decode()
+                  print(f"[today-all] HTTP {r.status} n_orders={len(json.loads(body))}")
+                  print(f"[today-all] FULL={body}")
+              except Exception as e:
+                  print(f"[today-all] EXC {e}")
               show("/orders?status=open&symbols=LMT", "open-LMT")
           if mode in ("positions", "both"):
               show("/positions", "positions")
