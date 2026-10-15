@@ -45,6 +45,48 @@ jobs:
               show("/orders?status=open&symbols=LMT", "open-LMT")
           if mode in ("positions", "both"):
               show("/positions", "positions")
+          if mode == "testorder":
+              # 挂一个远离市价的测试单(不会成交), 验证 status=open 能否查到挂单
+              import urllib.request as u
+              def call(method, path, body=None):
+                  data = json.dumps(body).encode() if body is not None else None
+                  req = u.Request(f"{BASE}{path}", data=data, headers={**H, "Content-Type": "application/json"}, method=method)
+                  try:
+                      with u.urlopen(req, timeout=15) as r:
+                          return r.status, r.read().decode()
+                  except u.error.HTTPError as e:
+                      return e.code, e.read().decode()
+
+              # 用 F(福特) 做测试: 当前价查询
+              st, body = call("GET", "/positions")
+              print(f"[test] positions HTTP {st}, n={len(json.loads(body)) if st==200 else body[:200]}")
+              st, q = call("GET", "/orders?status=open&limit=50&nested=false")
+              print(f"[test] pre-check open orders: HTTP {st} n={len(json.loads(q)) if st==200 else q[:200]}")
+              # 挂测试单: buy 1 F @ 8.00 (远低于市价, 不会成交)
+              st, body = call("POST", "/orders", {"symbol": "F", "qty": "1", "side": "buy",
+                                                  "type": "limit", "limit_price": "8.00",
+                                                  "time_in_force": "day"})
+              print(f"[test] place buy 1 F @ 8.00: HTTP {st} {body[:200]}")
+              oid = None
+              try:
+                  oid = json.loads(body).get("id")
+              except Exception:
+                  pass
+              # 同款请求查挂单(与 alpaca_trade.py open_orders() 完全一致)
+              st, body = call("GET", "/orders?status=open&limit=50&nested=false")
+              print(f"[test] AFTER place, status=open&limit=50&nested=false: HTTP {st} body={body[:400]}")
+              st, body = call("GET", "/orders?status=open&limit=50")
+              print(f"[test] AFTER place, status=open&limit=50 (no nested): HTTP {st} body={body[:400]}")
+              st, body = call("GET", "/orders?status=open&symbols=F")
+              print(f"[test] AFTER place, status=open&symbols=F: HTTP {st} body={body[:400]}")
+              st, body = call("GET", "/orders?status=all&limit=10")
+              print(f"[test] AFTER place, status=all&limit=10: HTTP {st} body={body[:400]}")
+              # 清理: 撤掉测试单
+              if oid:
+                  st, body = call("DELETE", f"/orders/{oid}")
+                  print(f"[test] cancel test order: HTTP {st} {body[:120]}")
+              st, body = call("GET", "/orders?status=open&limit=50&nested=false")
+              print(f"[test] after cancel, status=open: HTTP {st} body={body[:200]}")
           if mode in ("probe", "both"):
               # 高频轮询: 测 open_orders 端点稳定性(复现盘中 silent failure)
               import time
