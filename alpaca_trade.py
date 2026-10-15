@@ -168,10 +168,45 @@ def positions_map():
 
 
 def open_orders():
+    """查询未完成挂单。返回 list; **查询失败返回 None**(与空列表 [] 严格区分)。
+    2026-10-15 事故: 旧版 except 静默返回 [], execute() 把'查询失败'当成'没有挂单',
+    每 90 秒重复挂单, INTC/ITB/MSTR 买单各成交 5-6 次, CRL 超持 124 股。
+    """
+    last = None
+    for attempt in range(3):
+        try:
+            r = SESSION.get(f"{BASE}/orders?status=open&limit=50&nested=false",
+                            headers=_hdr(), timeout=15)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last = e
+            print(f"[OO-ERR] attempt {attempt + 1}/3: {type(e).__name__}: {e}")
+            time.sleep(1.0)
+    print(f"[OO-FAIL] open_orders 查询失败({last}), 返回 None -> 调用方必须熔断")
+    return None
+
+
+def order_status(oid: str):
+    """查单个订单状态; 失败返回 None"""
     try:
-        return api_get("/orders?status=open&limit=50&nested=false")
-    except Exception:
-        return []
+        return api_get(f"/orders/{oid}")
+    except Exception as e:
+        print(f"[OO-ERR] order_status {oid[:8]}: {type(e).__name__}: {e}")
+        return None
+
+
+def cancel_by_id(oid: str) -> str:
+    """按 ID 撤单。返回 'ok'(已撤或本来就没有) / 'gone'(404 已不存在) / 'fail'"""
+    try:
+        r = SESSION.delete(f"{BASE}/orders/{oid}", headers=_hdr(), timeout=15)
+        if r.status_code in (200, 204, 404, 422):
+            return "ok"
+        print(f"[WARN] cancel_by_id {oid[:8]}: {r.status_code} {r.text[:80]}")
+        return "fail"
+    except Exception as e:
+        print(f"[WARN] cancel_by_id {oid[:8]}: {e}")
+        return "fail"
 
 
 def cancel_symbol(sym):
@@ -195,10 +230,10 @@ def place_limit(sym, side, qty, px):
     if r.status_code in (200, 201):
         o = r.json()
         print(f"[ORDER] {side} {qty} {sym} @ {px:.2f} id={o.get('id','')[:8]}")
-        return True
+        return o
     print(f"[ORDER-REJECT] {side} {qty} {sym} @ {px:.2f}: "
           f"{r.status_code} {r.text[:120]}")
-    return False
+    return None
 
 
 def quote_of(sym) -> dict:
@@ -247,11 +282,15 @@ def load_state() -> dict:
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, encoding="utf-8") as f:
-                return json.load(f)
+                st = json.load(f)
+            st.setdefault("pending", {})     # 本地挂单登记(防重复挂单)
+            st.setdefault("seen_fills", [])  # 已统计的成交单 id(防重复累计)
+            return st
         except Exception:
             pass
     return {"targets": {}, "arrival": {}, "desired_qty": {},
             "target_ts": None, "target_src_ts": None, "race": None,
+            "pending": {}, "seen_fills": [],
             "exec": {"fills": 0, "buy_notional": 0, "buy_slip": 0,
                      "sell_notional": 0, "sell_slip": 0},
             "warned": {}, "last_report": "", "last_fill_check": None}
@@ -311,19 +350,19 @@ def cancel_and_confirm(sym: str, wait_s: float = 4.0) -> str:
     此时 Alpaca 撤单返回 404/422, 若忽略结果直接挂新单就会双重成交
     (2026-10-13 PDD 因此被买 3 次: 83.50/83.57/83.67 各 228 股)。
     """
-    mine = [o for o in open_orders() if o.get("symbol") == sym]
+    mine = [o for o in (open_orders() or []) if o.get("symbol") == sym]
     if not mine:
         return "cancelled"
     cancel_symbol(sym)
     deadline = time.time() + wait_s
     while time.time() < deadline:
-        left = [o for o in open_orders() if o.get("symbol") == sym]
+        left = [o for o in (open_orders() or []) if o.get("symbol") == sym]
         if not left:
             return "cancelled"
         if any(float(o.get("filled_qty") or 0) > 0 for o in left):
             return "filled"
         time.sleep(0.5)
-    for o in open_orders():
+    for o in (open_orders() or []):
         if o.get("symbol") == sym and float(o.get("filled_qty") or 0) > 0:
             return "filled"
     return "failed"
@@ -369,6 +408,14 @@ def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
     if px <= 0:
         return
 
+    # ---- 购买力预检(避免 403 刷屏与无效重试) ----
+    if side == "buy":
+        cash = st.get("_cash")
+        if cash is not None and qty * px > cash * 0.98:
+            _warn_once(st, sym, f"{sym} 买入 ${qty * px:,.0f} 超过可用现金 "
+                                f"${cash:,.0f}, 本轮跳过")
+            return
+
     exist = oo.get(sym)
     if exist and exist.get("side") == side:
         old_px = float(exist.get("limit_price") or 0)
@@ -384,8 +431,12 @@ def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
 
     # ---- 挂单前最终复查: 撤单窗口内行情/持仓可能已变 ----
     held_now = positions_map()
-    oo_now = {o["symbol"] for o in open_orders() if o.get("status") == "open"}
-    if sym in oo_now:
+    oo_now = open_orders()
+    if oo_now is None:
+        print(f"[EXEC-ABORT] {sym} 复查时 open_orders 查询失败, 本轮不挂新单")
+        return
+    oo_syms = {o["symbol"] for o in oo_now}
+    if sym in oo_syms:
         print(f"[EXEC] {sym} 撤单后仍有挂单存在, 本轮跳过")
         return
     cur_now = held_now.get(sym, 0)
@@ -401,9 +452,24 @@ def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
               max(cur_now, 0) if side == "sell" else abs(remaining_now))
     if qty <= 0:
         return
-    place_limit(sym, side, qty, px)
+    o = place_limit(sym, side, qty, px)
     print(f"[EXEC] {sym} 目标{desired} 现持{cur_now} 余{remaining_now:+d}"
           f" {side} {qty} @ {px} (arrival={arrival:.2f})")
+
+    # ---- 本地登记 + 挂单后成交确认(防重复挂单的最后防线) ----
+    if not o:
+        return
+    oid = o.get("id")
+    st["pending"][sym] = {"id": oid, "side": side, "qty": qty,
+                          "px": px, "ts": f"{now_ny:%F %H:%M:%S}"}
+    # 挂单后 2.5 秒确认状态: 若已成交, 下一轮对账会看到新持仓, 不会重复挂
+    time.sleep(2.5)
+    stt = order_status(oid)
+    if stt and stt.get("status") == "filled":
+        fq = float(stt.get("filled_qty") or 0)
+        print(f"[ORDER-FILLED] {sym} {side} {fq:g} @ {stt.get('filled_avg_price')} "
+              f"(挂单后立即成交)")
+        st["pending"].pop(sym, None)
 
 
 def elapsed_min(now_ny, st: dict) -> float:
@@ -414,14 +480,59 @@ def elapsed_min(now_ny, st: dict) -> float:
         return 0.0
 
 
+def _reconcile_pending(st: dict):
+    """对账本地登记的挂单(pending)。
+
+    每轮调用。逻辑:
+    1. Alpaca open 挂单 ∪ 本地 pending = 已知挂单宇宙
+    2. 本地 pending 里 Alpaca 查不到的: 按 ID 显式撤单(撤成功/404/已成交都算清除)
+    3. 本地 pending 里 Alpaca 还挂着的: 保留, 由 _order_one 的 KEEP 逻辑处理
+    4. pending 有残留时, 对应股票本轮不允许挂新单(在最源头阻断重复挂单)
+    """
+    oo = open_orders()
+    if oo is None:
+        return None                      # 查询失败: 调用方熔断
+    # status=open 查询返回的即未完结集合(new/accepted/held/partially_filled 等),
+    # 不再按 status 二次过滤, 否则 partially_filled 的单会被漏掉
+    remote_ids = {o.get("id") for o in oo}
+    for sym in list(st["pending"]):
+        p = st["pending"][sym]
+        oid = p.get("id")
+        if oid in remote_ids:
+            continue                     # 远端还挂着, 正常
+        # 远端查不到: 可能已成交/已撤/查询曾抽风。按 ID 显式撤一次兜底
+        res = cancel_by_id(oid)
+        stt = order_status(oid) if res == "ok" else None
+        stt_status = (stt or {}).get("status")
+        if stt_status == "filled":
+            print(f"[RECONCILE] {sym} 挂单 {oid[:8]} 已成交, 清除登记")
+            st["pending"].pop(sym, None)
+        elif res == "ok":
+            print(f"[RECONCILE] {sym} 挂单 {oid[:8]} 已撤销, 清除登记")
+            st["pending"].pop(sym, None)
+        else:
+            print(f"[RECONCILE] {sym} 挂单 {oid[:8]} 状态不明({stt_status}), "
+                  f"保留登记, 本轮不挂新单")
+    return oo
+
+
 def execute(st: dict, now_ny, equity: float):
     targets = st["targets"]
     if not targets:
         return
+
+    # ---- fail-closed: 挂单状态查不到就整体熔断, 绝不盲飞 ----
+    oo_raw = _reconcile_pending(st)
+    if oo_raw is None:
+        print("[EXEC-ABORT] open_orders 查询失败, 本轮不执行任何订单(fail-closed)")
+        return
+    oo = {o["symbol"]: o for o in oo_raw}
+
     held = positions_map()
-    oo = {o["symbol"]: o for o in open_orders() if o.get("status") == "open"}
+    st["_cash"] = float((account() or {}).get("cash") or 0)
     print(f"[EXEC] elapsed={elapsed_min(now_ny, st):.0f}min "
-          f"targets={len(targets)} held={len(held)} open_orders={len(oo)}")
+          f"targets={len(targets)} held={len(held)} open_orders={len(oo)} "
+          f"pending={len(st['pending'])} cash={st['_cash']:,.2f}")
 
     # 待处理清单 = 目标内股票 + 已持仓但不在目标里的股票(跟投清仓了的, 必须同步清仓)
     work = {sym: st["desired_qty"].get(sym, 0) for sym in targets}
@@ -431,6 +542,11 @@ def execute(st: dict, now_ny, equity: float):
             print(f"[CLEANUP] {sym} 不在跟投目标中, 计划清仓 {held[sym]} 股")
 
     for sym in sorted(work):
+        # pending 有登记且远端还挂着的票: 本轮不碰(等它成交/撤销后的下一轮)
+        if sym in st["pending"] and sym in oo:
+            print(f"[PENDING] {sym} 有在途挂单({st['pending'][sym]['side']} "
+                  f"{st['pending'][sym]['qty']}@{st['pending'][sym]['px']}), 本轮跳过")
+            continue
         _order_one(st, sym, work[sym], held, oo, now_ny, equity)
 
 
@@ -446,13 +562,18 @@ def _warn_once(st: dict, sym: str, msg: str):
 
 
 def collect_fills(st: dict, now_ny):
-    """统计成交滑点: 与到达价比较"""
+    """统计成交滑点: 与到达价比较。按订单 id 去重(旧版每轮全量重复累计,
+    2026-10-15 一天虚增 1194 笔)。"""
     after = st.get("last_fill_check")
     try:
         path = f"/orders?status=closed&limit=100&nested=false" + \
                (f"&after={after}" if after else "")
+        seen = set(st.get("seen_fills") or [])
         for o in api_get(path):
             if o.get("status") != "filled" or not str(o.get("client_order_id", "")).startswith("m"):
+                continue
+            oid = o.get("id")
+            if oid in seen:
                 continue
             fq, fpx = float(o.get("filled_qty") or 0), float(o.get("filled_avg_price") or 0)
             if fq <= 0 or fpx <= 0:
@@ -462,6 +583,7 @@ def collect_fills(st: dict, now_ny):
             notional = fq * fpx
             ex = st["exec"]
             ex["fills"] += 1
+            seen.add(oid)
             if arrival:
                 slip = ((arrival - fpx) if side == "buy" else (fpx - arrival)) / arrival
                 if side == "buy":
@@ -471,6 +593,8 @@ def collect_fills(st: dict, now_ny):
                     ex["sell_notional"] += notional
                     ex["sell_slip"] += slip * notional
             print(f"[FILL] {side} {fq:g} {sym} @ {fpx} (arrival={arrival})")
+        # 只保留最近 500 个 id, 防止 state 无限膨胀
+        st["seen_fills"] = list(seen)[-500:]
     except Exception as e:
         print(f"[FILLS-ERR] {e}")
     st["last_fill_check"] = f"{now_ny.astimezone(ZoneInfo('UTC')):%F}T00:00:00Z"
@@ -543,6 +667,12 @@ def main():
         st["target_src_ts"] = latest.get("ts")
         st["desired_qty"] = {}
         st["arrival"] = {}
+        # 新目标到来: 撤销全部在途挂单(旧目标作废), 按新目标重新对账
+        for sym, p in list(st["pending"].items()):
+            res = cancel_by_id(p.get("id", ""))
+            print(f"[RETARGET] 撤旧挂单 {sym} {p.get('side')} {p.get('qty')} "
+                  f"-> {res}")
+            st["pending"].pop(sym, None)
         for sym, w in sorted(weights.items()):
             q = quote_of(sym)
             px = q.get("mid") if q.get("ok") else 0
