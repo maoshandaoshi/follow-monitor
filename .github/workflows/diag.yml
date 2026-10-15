@@ -24,7 +24,7 @@ jobs:
           KEY = os.environ.get("APCA_API_KEY_ID")
           SEC = os.environ.get("APCA_API_SECRET")
           BASE = "https://paper-api.alpaca.markets/v2"
-          H = {"APCA-API-KEY-ID": KEY or "", "APCA-API-SECRET": SEC or ""}
+          H = {"APCA-API-KEY-ID": KEY or "", "APCA-API-SECRET-KEY": SEC or ""}
           mode = "${{ github.event.inputs.mode }}"
 
           def show(path, label):
