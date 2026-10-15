@@ -46,8 +46,15 @@ jobs:
                   req = urllib.request.Request(f"{BASE}/orders?status=all&limit=100&nested=false&after=2026-10-15T12:00:00Z", headers=H)
                   with urllib.request.urlopen(req, timeout=20) as r:
                       body = r.read().decode()
-                  print(f"[today-all] HTTP {r.status} n_orders={len(json.loads(body))}")
-                  print(f"[today-all] FULL={body}")
+                  orders = json.loads(body)
+                  print(f"[today-all] n_orders={len(orders)}")
+                  from collections import Counter
+                  c = Counter((o['symbol'], o['side'], o['status']) for o in orders)
+                  for (sym, side, st), n in sorted(c.items()):
+                      print(f"[today-all] {sym} {side} {st} x{n}")
+                  for o in sorted(orders, key=lambda x: x['filled_at'] or x['created_at']):
+                      if o.get('status') == 'filled':
+                          print(f"[fill] {o['created_at'][11:19]} {o['side']} {o['symbol']} qty={o['qty']} filled={o['filled_qty']} @{o['filled_avg_price']}")
               except Exception as e:
                   print(f"[today-all] EXC {e}")
               show("/orders?status=open&symbols=LMT", "open-LMT")
