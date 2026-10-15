@@ -59,7 +59,15 @@ jobs:
                   print(f"[today-all] EXC {e}")
               show("/orders?status=open&symbols=LMT", "open-LMT")
           if mode in ("positions", "both"):
-              show("/positions", "positions")
+              try:
+                  req = urllib.request.Request(f"{BASE}/positions", headers=H)
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      ps = json.loads(r.read().decode())
+                  for p in ps:
+                      print(f"[pos] {p['symbol']} qty={p['qty']} avail={p.get('qty_available')} "
+                            f"avg={p['avg_entry_price']} mv={p['market_value']} pl={p['unrealized_pl']}")
+              except Exception as e:
+                  print(f"[pos] EXC {e}")
           if mode == "testorder":
               # 挂一个远离市价的测试单(不会成交), 验证 status=open 能否查到挂单
               import urllib.request as u
