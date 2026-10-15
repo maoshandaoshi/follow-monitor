@@ -20,20 +20,22 @@ jobs:
           APCA_API_SECRET: ${{ secrets.ALPACA_SECRET }}
         run: |
           python3 - <<'PYEOF'
-          import os, json, requests
+          import os, json, urllib.request, urllib.error, ssl
           KEY = os.environ.get("APCA_API_KEY_ID")
           SEC = os.environ.get("APCA_API_SECRET")
           BASE = "https://paper-api.alpaca.markets/v2"
-          H = {"APCA-API-KEY-ID": KEY, "APCA-API-SECRET": SEC}
+          H = {"APCA-API-KEY-ID": KEY or "", "APCA-API-SECRET": SEC or ""}
           mode = "${{ github.event.inputs.mode }}"
 
           def show(path, label):
               try:
-                  r = requests.get(f"{BASE}{path}", headers=H, timeout=15)
-                  print(f"[{label}] GET {path} -> HTTP {r.status_code}")
-                  body = r.text[:600]
-                  # 脱敏: 不打印任何 key 相关内容
-                  print(f"[{label}] body: {body}")
+                  req = urllib.request.Request(f"{BASE}{path}", headers=H)
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      print(f"[{label}] GET {path} -> HTTP {r.status}")
+                      print(f"[{label}] body: {r.read().decode()[:600]}")
+              except urllib.error.HTTPError as e:
+                  print(f"[{label}] GET {path} -> HTTP {e.code}")
+                  print(f"[{label}] body: {e.read().decode()[:600]}")
               except Exception as e:
                   print(f"[{label}] GET {path} -> EXC {type(e).__name__}: {e}")
 
@@ -43,6 +45,5 @@ jobs:
               show("/orders?status=open&symbols=LMT", "open-LMT")
           if mode in ("positions", "both"):
               show("/positions", "positions")
-          # 打印 key 长度前缀用于确认 secret 注入是否正常(不泄露内容)
           print(f"[env] key_len={len(KEY or '')} sec_len={len(SEC or '')}")
           PYEOF
