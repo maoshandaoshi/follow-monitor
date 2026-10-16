@@ -23,7 +23,9 @@ REPO = "maoshandaoshi/follow-monitor"
 WORKFLOW = "follow.yml"
 KEEPALIVE_CRON = "0 6 * * 0"
 COOLDOWN = timedelta(minutes=10)      # 上一轮结束后的静默期, 防重复启动
-NY_OPEN, NY_CLOSE = 8, 21             # 纽约时段窗(含盘前盘后, session.py 自行判断收盘)
+# 纽约时段窗(含盘前盘后)。8:45 起才启动: session.py 盘前等待封顶 45 分钟,
+# 8:45 起跑恰好等到 9:30 开盘; 更早起跑只会等完退出, 白占 runner。
+NY_OPEN, NY_CLOSE = (8, 45), (21, 0)
 
 
 def out(key, value):
@@ -57,7 +59,7 @@ def decide():
                 return "false", "skip", "run %s finished %ds ago" % (
                     r["databaseId"], int((now - t).total_seconds()))
     ny = datetime.now(ZoneInfo("America/New_York"))
-    if not (NY_OPEN <= ny.hour < NY_CLOSE):
+    if not (NY_OPEN <= (ny.hour, ny.minute) < NY_CLOSE):
         return "false", "skip", "outside NY window (%s)" % ny.strftime("%H:%M %Z")
     return "true", "session", "no active session, NY %s" % ny.strftime("%H:%M %Z")
 

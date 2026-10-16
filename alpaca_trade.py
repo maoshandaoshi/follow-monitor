@@ -2,7 +2,7 @@
 """
 Alpaca 镜像跟单执行器 (paper)
 =============================
-配合 follow_action.py (监控跟投易) 使用:
+配合 follow_action.py (监控盈立持仓) 使用:
   monitor 每轮写 data/latest.json (目标权重 + 跟投总值 + 是否发生调仓)
   本脚本读取后, 在 Alpaca 模拟账户上镜像执行, 并记录"对战收益率"。
 
@@ -13,7 +13,9 @@ Alpaca 镜像跟单执行器 (paper)
     10-15 分钟 买入挂 ask   / 卖出挂 bid    (主动成交)
     15 分钟后   跟随最新盘口追价, 封顶 = 到达价 +0.6% (买) / -0.6% (卖)
     45 分钟后   封顶放宽到 ±1.5% (保证跟单完成, 优先不脱队)
-  每 5 分钟一轮 (由 GitHub Actions cron 驱动), 未成交自动重挂新价格。
+  在途挂单**每轮重新定价**: 价格移动超过 0.1% 就撤旧单挂新单(阶梯推进),
+  只有"撤单结果不明"才暂停 —— 旧版一律跳过在途单, 挂单永远停在初始价
+  (2026-10-16 NEM 买单 115.21 挂了一下午没重定价, 收盘零成交)。
 
 流动性护栏 (避免在成交差的票上付出过大冲击成本):
   - 盘口价差 > 3% 的票本轮跳过
@@ -22,7 +24,7 @@ Alpaca 镜像跟单执行器 (paper)
 
 收益率对战:
   - **起点 = 第一次"可执行的"镜像调仓那一轮**(盘中、非手动), 同一轮同一时刻
-    取 跟投易 total_asset 与 Alpaca equity 作为双方基准 —— 起点这一刻两边
+    取 盈立 total_asset 与 Alpaca equity 作为双方基准 —— 起点这一刻两边
     收益率必然都是 0.00%; 收盘/周末/手动查询不会误启基线。
   - 之后 收益率 = 当前数额 / 起点数额 - 1, 每日收盘推送对比 + 执行滑点统计
   - 滑点 = (到达价-成交价)/到达价 (买) —— 正值 = 买得比信号到达时便宜
@@ -32,6 +34,11 @@ Alpaca 镜像跟单执行器 (paper)
   PUSH_WEBHOOK                   推送地址 (可选, 多个用 英文逗号/分号/换行 分隔)
   PUSH_WEBHOOK_FEISHU            飞书机器人地址 (可选, 与 PUSH_WEBHOOK 并存)
   MANUAL=1                       手动模式: 只报告状态, 不交易
+
+推送约定(用户明确要求): 只有两类消息会推到手机 ——
+  ① 调仓(由 follow_action.py 检测盈立持仓变化后推送"股票代码+比例")
+  ② 收盘对战日报(本脚本 16:00 NY 后推送, 含未完成挂单提示)
+流动性告警/镜像执行细节一律只打日志, 不推送。
 """
 import base64
 import hashlib
@@ -68,6 +75,9 @@ DESPERATE_CAP = 0.015      # 疯狂上限 ±1.5%
 MAX_SPREAD = 0.03          # 盘口价差 > 3% 跳过
 MAX_ADV_PART = 0.10         # 订单金额 > ADV 10% 跳过
 REPLACE_EPS = 0.001         # 现有挂单价格与新价差 <0.1% 时不重挂(保队列)
+STALE_REFRESH_MIN = 60.0    # 信号超过 60 分钟视为陈旧: 到达价刷新为当前中间价,
+                            # 否则追价封顶钉在陈旧价格上(周末/会话中断后
+                            # 买单永远成交不了)。每 60 分钟最多刷新一次。
 
 SESSION = requests.Session()
 
@@ -249,10 +259,15 @@ def quote_of(sym) -> dict:
         ask = float(q.get("ap") or 0)
         lt = float((s.get("latestTrade") or {}).get("p") or 0)
         dc = float((s.get("dailyBar") or {}).get("c") or 0)
+        # 无真实盘口时用最新价同时充当买卖价。
+        # 旧版 bid=min(lt,dc) ask=max(lt,dc) 会**伪造**一个 |最新价-收盘价|
+        # 的价差: 行情波动大时直接超过 MAX_SPREAD, 把整只票锁死
+        # (2026-10-16 MSTR/TEM 清理卖盘被伪价差挡了半小时)。
+        ref = lt or dc
         if bid <= 0:
-            bid = min(lt, dc) if lt > 0 and dc > 0 else (lt or dc)
+            bid = min(ask, ref) if ask > 0 else ref
         if ask <= 0:
-            ask = max(lt, dc) if lt > 0 and dc > 0 else (lt or dc)
+            ask = max(bid, ref) if bid > 0 else ref
         if bid <= 0 or ask <= 0 or ask < bid:
             return {"ok": False}
         return {"ok": True, "bid": bid, "ask": ask, "mid": (bid + ask) / 2}
@@ -288,7 +303,7 @@ def load_state() -> dict:
             return st
         except Exception:
             pass
-    return {"targets": {}, "arrival": {}, "desired_qty": {},
+    return {"targets": {}, "arrival": {}, "arrival_ts": {}, "desired_qty": {},
             "target_ts": None, "target_src_ts": None, "race": None,
             "pending": {}, "seen_fills": [],
             "exec": {"fills": 0, "buy_notional": 0, "buy_slip": 0,
@@ -371,6 +386,10 @@ def cancel_and_confirm(sym: str, wait_s: float = 4.0) -> str:
 def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
                now_ny, equity: float):
     """把 sym 对齐到 desired 股。含撤单确认 + 挂单前复查, 保证不会重复下单。"""
+    # 撤单结果不明的在途单: 宁可这轮不动, 也不冒叠单的风险
+    if (st.get("pending") or {}).get(sym, {}).get("stuck"):
+        print(f"[PENDING] {sym} 在途单状态不明, 本轮不挂新单")
+        return
     cur = held.get(sym, 0)
     remaining = desired - cur
     if remaining == 0:
@@ -385,7 +404,8 @@ def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
         return
     mid, spread = q["mid"], (q["ask"] - q["bid"]) / max(q["mid"], 1e-9)
     if spread > MAX_SPREAD:
-        _warn_once(st, sym, f"{sym} 盘口价差 {spread*100:.1f}% 过大, 本轮跳过")
+        _warn_once(st, sym, f"{sym} 盘口价差 {spread*100:.1f}% 过大"
+                            f"(bid={q['bid']:.2f} ask={q['ask']:.2f}), 本轮跳过")
         return
 
     side = "buy" if remaining > 0 else "sell"
@@ -402,9 +422,24 @@ def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
                             f"成交额的10% (${adv:,.0f}), 跳过")
         return
 
-    arrival = st["arrival"].get(sym) or q["mid"]
-    st["arrival"].setdefault(sym, q["mid"])
-    px = price_for(side, q, arrival, elapsed_min(now_ny, st))
+    # ---- 到达价: 信号陈旧(周末/会话中断)时按当前中间价刷新, 防止追价封顶
+    #      钉在几天前的价格上导致买单永远成交不了。每 60 分钟最多刷新一次。
+    ats = st.setdefault("arrival_ts", {})
+    now_ts = now_ny.timestamp()
+    el = elapsed_min(now_ny, st)
+    arrival = st["arrival"].get(sym)
+    if not arrival or arrival <= 0:
+        arrival = q["mid"]
+        st["arrival"][sym] = arrival
+        ats[sym] = now_ts
+    elif (el > STALE_REFRESH_MIN
+          and now_ts - float(ats.get(sym) or 0) > STALE_REFRESH_MIN * 60):
+        print(f"[REFRESH] {sym} 信号已 {el:.0f} 分钟, 到达价 "
+              f"{arrival:.2f} -> {q['mid']:.2f}")
+        arrival = q["mid"]
+        st["arrival"][sym] = arrival
+        ats[sym] = now_ts
+    px = price_for(side, q, arrival, el)
     if px <= 0:
         return
 
@@ -486,8 +521,10 @@ def _reconcile_pending(st: dict):
     每轮调用。逻辑:
     1. Alpaca open 挂单 ∪ 本地 pending = 已知挂单宇宙
     2. 本地 pending 里 Alpaca 查不到的: 按 ID 显式撤单(撤成功/404/已成交都算清除)
-    3. 本地 pending 里 Alpaca 还挂着的: 保留, 由 _order_one 的 KEEP 逻辑处理
-    4. pending 有残留时, 对应股票本轮不允许挂新单(在最源头阻断重复挂单)
+    3. 本地 pending 里 Alpaca 还挂着的: 保留, 由 _order_one 的阶梯重挂处理
+       (价格移动超 0.1% 撤旧挂新, 否则 KEEP —— 在途单不再是"冻结"理由)
+    4. 撤单结果不明(网络失败等)的登记 stuck 标记: 该票本轮不挂新单,
+       下一轮重试, 避免旧单可能还活着时叠单
     """
     oo = open_orders()
     if oo is None:
@@ -499,6 +536,7 @@ def _reconcile_pending(st: dict):
         p = st["pending"][sym]
         oid = p.get("id")
         if oid in remote_ids:
+            p.pop("stuck", None)         # 远端可见, 解除暂停标记
             continue                     # 远端还挂着, 正常
         # 远端查不到: 可能已成交/已撤/查询曾抽风。按 ID 显式撤一次兜底
         res = cancel_by_id(oid)
@@ -512,7 +550,8 @@ def _reconcile_pending(st: dict):
             st["pending"].pop(sym, None)
         else:
             print(f"[RECONCILE] {sym} 挂单 {oid[:8]} 状态不明({stt_status}), "
-                  f"保留登记, 本轮不挂新单")
+                  f"标记 stuck, 本轮不挂新单")
+            p["stuck"] = True
     return oo
 
 
@@ -542,10 +581,13 @@ def execute(st: dict, now_ny, equity: float):
             print(f"[CLEANUP] {sym} 不在跟投目标中, 计划清仓 {held[sym]} 股")
 
     for sym in sorted(work):
-        # pending 有登记且远端还挂着的票: 本轮不碰(等它成交/撤销后的下一轮)
-        if sym in st["pending"] and sym in oo:
-            print(f"[PENDING] {sym} 有在途挂单({st['pending'][sym]['side']} "
-                  f"{st['pending'][sym]['qty']}@{st['pending'][sym]['px']}), 本轮跳过")
+        # 只有"撤单结果不明"的在途单才暂停挂新单; 正常在途单交给 _order_one
+        # 走阶梯重挂。旧版一律跳过 -> 挂单永远停在初始价 (2026-10-16 NEM 买单
+        # 115.21 挂了一下午没重定价, 收盘零成交, 5.6 万美金现金干看着)。
+        p = st["pending"].get(sym) or {}
+        if p.get("stuck"):
+            print(f"[PENDING] {sym} 在途单状态不明({p.get('side')} "
+                  f"{p.get('qty')}@{p.get('px')}), 本轮跳过")
             continue
         _order_one(st, sym, work[sym], held, oo, now_ny, equity)
 
@@ -557,8 +599,8 @@ def _warn_once(st: dict, sym: str, msg: str):
     st["warned"][key] = True
     st["warned"] = {k: v for k, v in st["warned"].items()
                     if k.split(":")[-1] >= f"{datetime.now(NY_TZ):%F}"}
+    # 只记日志不推送: 用户约定只有"调仓"和"日报"两类消息(2026-10-17)
     print(f"[LIQ-WARN] {msg}")
-    push("流动性告警", msg)
 
 
 def collect_fills(st: dict, now_ny):
@@ -612,12 +654,23 @@ def race_lines(st: dict, latest: dict, equity: float) -> list:
     fr = (cur_f / fb - 1) if (fb > 0 and cur_f > 0) else 0.0
     ar = (equity / ab - 1) if (ab > 0 and equity > 0) else 0.0
     lead = ar - fr
-    return [f"跟投易 {fb:,.0f} → {cur_f:,.0f}  {fr*100:+.2f}%"
-            if cur_f > 0 else f"跟投易 起点 {fb:,.0f} (本轮无快照)",
+    return [f"盈立 {fb:,.0f} → {cur_f:,.0f}  {fr*100:+.2f}%"
+            if cur_f > 0 else f"盈立 起点 {fb:,.0f} (本轮无快照)",
             f"Alpaca  {ab:,.0f} → {equity:,.0f}  {ar*100:+.2f}%"
             if equity > 0 else f"Alpaca 起点 {ab:,.0f} (无权益)",
-            f"{'Alpaca' if lead >= 0 else '跟投易'} 领先 {abs(lead)*100:.2f} pt"
+            f"{'Alpaca' if lead >= 0 else '盈立'} 领先 {abs(lead)*100:.2f} pt"
             f"   起点 {r.get('t0', '')}"]
+
+
+def pending_lines(st: dict) -> list:
+    """日报附注: 还没跟完的挂单。跟单没做完要能一眼看到"""
+    p = st.get("pending") or {}
+    if not p:
+        return []
+    out = ["未完成挂单:"]
+    for sym, o in sorted(p.items()):
+        out.append(f"  {sym} {o.get('side')} {o.get('qty')}@{o.get('px')}")
+    return out
 
 
 def exec_lines(st: dict) -> list:
@@ -667,6 +720,7 @@ def main():
         st["target_src_ts"] = latest.get("ts")
         st["desired_qty"] = {}
         st["arrival"] = {}
+        st["arrival_ts"] = {}
         # 新目标到来: 撤销全部在途挂单(旧目标作废), 按新目标重新对账
         for sym, p in list(st["pending"].items()):
             res = cancel_by_id(p.get("id", ""))
@@ -701,10 +755,12 @@ def main():
         print(f"[RACE] 对战起点: 跟投易 {st['race']['follow_base']:,.2f}  "
               f"Alpaca {st['race']['alpaca_base']:,.2f}  (双方均为 0.00%)")
 
-    # 4) 新调仓信号推送 (起跑当轮带上 0.00% / 0.00% 的起点)
+    # 4) 新调仓信号: 只记日志不推送。
+    #    推送由 follow_action.py 的"调仓变动"负责(检测到盈立持仓变化那一刻),
+    #    两边都推会造成同一调仓两条消息。用户约定: 只有调仓和日报两类推送。
     if sig_text:
         tail = ("\n" + "\n".join(race_lines(st, latest, equity))) if seeded else ""
-        push("开始镜像调仓", sig_text + tail)
+        print("[MIRROR] 开始镜像调仓\n" + sig_text + tail)
 
     # 5) 成交统计
     collect_fills(st, now_ny)
@@ -714,12 +770,16 @@ def main():
     if MANUAL:
         push("Alpaca 状态",
              "\n".join(alpaca_pos_lines(held) + race_lines(st, latest, equity)
-                       + exec_lines(st)))
+                       + pending_lines(st) + exec_lines(st)))
     elif (st.get("race") and now_ny.hour >= 16
           and st.get("last_report") != today):
+        # 收盘后先对账一次: 把收盘时已过期/已成交的挂单登记清掉,
+        # 日报里的"未完成挂单"才是真实状态
+        _reconcile_pending(st)
         st["last_report"] = today
         push("对战日报",
-             "\n".join(race_lines(st, latest, equity) + exec_lines(st)))
+             "\n".join(race_lines(st, latest, equity) + pending_lines(st)
+                       + exec_lines(st)))
 
     save_state(st)
     print("[DONE]")

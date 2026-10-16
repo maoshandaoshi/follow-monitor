@@ -3,13 +3,14 @@
 """
 盘中长会话 (GitHub Actions 专用)
 
-背景: GitHub 的 schedule cron 不可靠(延迟/漏跑很常见), 每 5 分钟一次靠不住。
-方案: cron 只负责"启动会话", 启动后本进程在云端连续轮询, 每 INTERVAL 秒
-      跑一轮 follow_action.py (监控跟投易) + alpaca_trade.py (镜像交易),
+背景: GitHub 的 schedule cron 不可靠(延迟/漏跑很常见), 靠 cron 准点没戏。
+方案: cron 只负责"启动会话"(盘前 8:45 NY 起每 10 分钟一个触发点),
+      启动后本进程在云端连续轮询, 每 INTERVAL 秒跑一轮
+      follow_action.py (监控盈立持仓) + alpaca_trade.py (镜像交易),
       直到美股收盘或达到时长上限, 期间定期把状态 commit 回仓库。
 
-启动窗口(UTC): 13:30 (9:30 EDT 开盘) / 15:35 (盘中备份) / 18:30 (接续到收盘)
-每段最长 LOOP_MAX_HOURS 小时, 13:30 段 + 18:30 段恰好首尾相接覆盖全天。
+盘前启动的会话会先等到 9:30 开盘(等待上限 45 分钟), 因此对开盘 cron
+的延迟/丢失有 ~45 分钟免疫力; 等待 + 轮询总时长 5h45m < 任务 355 分钟上限。
 
 环境变量:
   LOOP_INTERVAL   每轮间隔秒数 (默认 300)
@@ -29,6 +30,10 @@ MAX_SECONDS = float(os.environ.get("LOOP_MAX_HOURS", "5")) * 3600
 MAX_ITER = int(os.environ.get("LOOP_MAX_ITER", "0"))
 OPEN = dtime(9, 30)
 CLOSE = dtime(16, 0)
+# 盘前等待上限: cron 可能整班丢失, 因此允许 8:45 NY 就起跑等开盘,
+# 对开盘 cron 的延迟有 ~45 分钟免疫力; 等待 + 轮询总时长必须留在
+# GitHub 单任务 355 分钟上限内(45min + 5h = 5h45m)。
+PREOPEN_WAIT_MAX = 2700.0
 
 
 def market_open(dt: datetime) -> bool:
@@ -79,6 +84,7 @@ def commit_state(round_no: int):
 def main():
     t0 = time.time()
     rnd = 0
+    waited = 0.0
     print(f"[SESSION] 启动 {datetime.now(NY):%F %H:%M:%S} NY  "
           f"interval={INTERVAL}s max={MAX_SECONDS/3600:.1f}h")
 
@@ -90,13 +96,19 @@ def main():
                 print(f"[SESSION] 周末休市, 退出 ({now:%F %H:%M} NY)")
                 break
             if now.time() < OPEN:
-                wait = min((datetime.combine(now.date(), OPEN, NY) - now).total_seconds(),
-                           3600)
-                if rnd == 0 and wait > 5:
-                    print(f"[SESSION] 尚未开盘, 等待 {wait/60:.0f} 分钟至 9:30 NY")
+                # 盘前: 等到开盘再接棒(累计等待封顶 45 分钟, 防任务超时被杀)。
+                # 到点仍未开盘就退出, 交给下一个 cron(每 10 分钟一个触发点)。
+                to_open = (datetime.combine(now.date(), OPEN, NY)
+                           - now).total_seconds()
+                wait = min(max(to_open, 0.0),
+                           max(0.0, PREOPEN_WAIT_MAX - waited))
+                if rnd == 0 and wait > 0:
+                    print(f"[SESSION] 尚未开盘, 等待 {wait/60:.0f} 分钟至 "
+                          f"9:30 NY (盘前等待上限 {PREOPEN_WAIT_MAX/60:.0f} 分钟)")
                     time.sleep(wait)
+                    waited += wait
                     continue
-                print("[SESSION] 等待后仍未开盘, 退出")
+                print("[SESSION] 盘前等待已达上限, 退出(交给后续 cron 接管)")
                 break
             # 已收盘(工作日): 补跑最后一轮 —— 让"收盘对战日报"发得出去。
             # (交易脚本内部按日期去重 last_report, 同一天不会重复推送)

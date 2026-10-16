@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-盈立跟投易监控 — GitHub Actions / CI 版
+盈立持仓监控 — GitHub Actions / CI 版
 ========================================
 每次运行(由 GitHub Actions 定时触发):
   1. OpenAPI 渠道登录(RSA 签名)获取 30 天 JWT
-  2. 拉取跟投易持仓明细 + 调仓流水(switch-history)
+  2. 拉取盈立持仓明细 + 调仓流水(switch-history)
   3. 与仓库里 data/state.json 对比 -> 检测调仓
   4. 调仓发生 -> webhook 推送到手机(Server酱/企业微信/钉钉/Telegram 自动识别)
   5. 美股收盘后第一次运行 -> 推送当日持仓摘要
@@ -186,7 +186,9 @@ def market_open(now_ny) -> bool:
     if now_ny.weekday() >= 5:
         return False
     hm = (now_ny.hour, now_ny.minute)
-    return (9, 30) <= hm < (16, 0)
+    # 含 16:00 整点: 收盘那一刻的补跑轮要能刷新 latest.json,
+    # 否则对战日报用的是两分钟前的旧快照
+    return (9, 30) <= hm <= (16, 0)
 
 
 # ---------------- 状态与 diff ----------------
@@ -393,8 +395,10 @@ def main():
     # --- 每轮写出最新快照给镜像交易器 ---
     write_latest(result, bool(changes or new_orders))
 
-    # --- 推送逻辑: 只在真实调仓时推送; 收盘对战对比由 alpaca_trade.py 负责 ---
-    if changes or new_orders:
+    # --- 推送逻辑: 只在真实调仓(盈立持仓股数变化)时推送;
+    #     新订单流水只登记不推送(没成交不算调仓);
+    #     收盘对战日报由 alpaca_trade.py 负责 ---
+    if changes:
         push("调仓变动", push_alert_text(result, changes, state.get("pcts", {})))
 
     # --- 状态更新 (有实质变化才写, 避免每次运行都产生 commit) ---
