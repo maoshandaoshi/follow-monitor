@@ -13,7 +13,7 @@
 的延迟/丢失有 ~45 分钟免疫力; 等待 + 轮询总时长 5h45m < 任务 355 分钟上限。
 
 环境变量:
-  LOOP_INTERVAL   每轮间隔秒数 (默认 300)
+  LOOP_INTERVAL   每轮间隔秒数 (默认 90: 盈立调仓 -> 推送/镜像延迟 <=90s)
   LOOP_MAX_HOURS  单次会话最长小时数 (默认 5, GitHub 单任务上限 6h)
   LOOP_MAX_ITER   仅跑 N 轮后退出 (测试用)
 """
@@ -25,7 +25,7 @@ from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 NY = ZoneInfo("America/New_York")
-INTERVAL = int(os.environ.get("LOOP_INTERVAL", "300"))
+INTERVAL = int(os.environ.get("LOOP_INTERVAL", "90"))
 MAX_SECONDS = float(os.environ.get("LOOP_MAX_HOURS", "5")) * 3600
 MAX_ITER = int(os.environ.get("LOOP_MAX_ITER", "0"))
 OPEN = dtime(9, 30)
