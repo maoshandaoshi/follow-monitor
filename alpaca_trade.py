@@ -768,7 +768,7 @@ def main():
                       "alpaca_base": equity,
                       "follow_src": str(latest.get("ts") or "")}
         seeded = True
-        print(f"[RACE] 对战起点: 跟投易 {st['race']['follow_base']:,.2f}  "
+        print(f"[RACE] 对战起点: 盈立 {st['race']['follow_base']:,.2f}  "
               f"Alpaca {st['race']['alpaca_base']:,.2f}  (双方均为 0.00%)")
 
     # 4) 新调仓信号: 只记日志不推送。
