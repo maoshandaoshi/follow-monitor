@@ -673,6 +673,22 @@ def pending_lines(st: dict) -> list:
     return out
 
 
+def gap_lines(st: dict, held: dict) -> list:
+    """日报附注: 目标股数还没买齐的(跟单进度)。
+    2026-10-16 的教训: NEM 目标 241 股实际 0 股, 收盘日报里完全看不出来,
+    用户只能自己发现"没跟上"。短提 >=2 股且 >=2% 才显示, 避免噪音。"""
+    out = []
+    for sym, want in sorted((st.get("desired_qty") or {}).items()):
+        have = int(held.get(sym, 0))
+        short = want - have
+        if short >= 2 and short >= want * 0.02:
+            out.append(f"  {sym} {have}/{want} 股未完成")
+    for sym, have in sorted(held.items()):
+        if sym not in (st.get("targets") or {}):
+            out.append(f"  {sym} 持仓 {have} 股待清(不在盈立目标中)")
+    return (["跟单进度:"] + out) if out else []
+
+
 def exec_lines(st: dict) -> list:
     ex = st["exec"]
     if not ex["fills"]:
@@ -770,7 +786,8 @@ def main():
     if MANUAL:
         push("Alpaca 状态",
              "\n".join(alpaca_pos_lines(held) + race_lines(st, latest, equity)
-                       + pending_lines(st) + exec_lines(st)))
+                       + gap_lines(st, held) + pending_lines(st)
+                       + exec_lines(st)))
     elif (st.get("race") and now_ny.hour >= 16
           and st.get("last_report") != today):
         # 收盘后先对账一次: 把收盘时已过期/已成交的挂单登记清掉,
@@ -778,8 +795,8 @@ def main():
         _reconcile_pending(st)
         st["last_report"] = today
         push("对战日报",
-             "\n".join(race_lines(st, latest, equity) + pending_lines(st)
-                       + exec_lines(st)))
+             "\n".join(race_lines(st, latest, equity) + gap_lines(st, held)
+                       + pending_lines(st) + exec_lines(st)))
 
     save_state(st)
     print("[DONE]")
