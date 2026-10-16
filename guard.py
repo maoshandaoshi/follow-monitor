@@ -59,7 +59,9 @@ def decide():
                 return "false", "skip", "run %s finished %ds ago" % (
                     r["databaseId"], int((now - t).total_seconds()))
     ny = datetime.now(ZoneInfo("America/New_York"))
-    if not (NY_OPEN <= (ny.hour, ny.minute) < NY_CLOSE):
+    # 时间窗只门控 cron: 手动 dispatch / push 部署是用户显式意图, 放行
+    # (session.py 自己会判断盘前等待/收盘补轮/周末退出, 不会误交易)
+    if schedule and not (NY_OPEN <= (ny.hour, ny.minute) < NY_CLOSE):
         return "false", "skip", "outside NY window (%s)" % ny.strftime("%H:%M %Z")
     return "true", "session", "no active session, NY %s" % ny.strftime("%H:%M %Z")
 
