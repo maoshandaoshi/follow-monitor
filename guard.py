@@ -33,6 +33,22 @@ def out(key, value):
         f.write("%s=%s\n" % (key, value))
 
 
+def _ran_session(run_id) -> bool:
+    """该 run 是否真正跑过 session job。
+
+    只看 session job 的 conclusion: gate 秒退的 run (conclusion=skipped)
+    不算真会话。查询失败按 True 处理(保守: 维持冷却, 防止 API 抖动时
+    重启风暴)。
+    """
+    res = subprocess.run(
+        ["gh", "api", "repos/%s/actions/runs/%s/jobs" % (REPO, run_id),
+         "--jq", '[.jobs[] | select(.name=="session")][0].conclusion // "none"'],
+        capture_output=True, text=True, timeout=30)
+    if res.returncode != 0:
+        return True
+    return res.stdout.strip().strip('"') not in ("skipped", "none")
+
+
 def decide():
     """返回 (start, action, reason)"""
     schedule = os.environ.get("SCHEDULE", "")
@@ -55,9 +71,16 @@ def decide():
             return "false", "skip", "run %s is %s" % (r["databaseId"], r["status"])
         if r["status"] == "completed":
             t = datetime.fromisoformat(r["updatedAt"].replace("Z", "+00:00"))
-            if now - t < COOLDOWN:
-                return "false", "skip", "run %s finished %ds ago" % (
+            if now - t >= COOLDOWN:
+                break          # 列表按时间倒序, 再老的不用看了
+            # 冷却期只统计真正跑过 session 的 run。gate 秒退的按铃 run
+            # (session job=skipped) 不参与冷却 —— 否则 5 分钟看门狗的每次
+            # 按铃都会被"上一次按铃 5 分钟前刚结束"冷却, 形成永远无法
+            # 启动会话的死锁 (2026-10-19 全天事故)
+            if _ran_session(r["databaseId"]):
+                return "false", "skip", "real session run %s finished %ds ago" % (
                     r["databaseId"], int((now - t).total_seconds()))
+            # gate-only run: 继续看更早的
     ny = datetime.now(ZoneInfo("America/New_York"))
     # 时间窗只门控 cron: 手动 dispatch / push 部署是用户显式意图, 放行
     # (session.py 自己会判断盘前等待/收盘补轮/周末退出, 不会误交易)
