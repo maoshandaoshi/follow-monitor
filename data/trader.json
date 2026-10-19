@@ -20,12 +20,7 @@
  },
  "target_ts": "2026-10-19T15:31:04.825403-04:00",
  "target_src_ts": "2026-10-19 15:31:02",
- "race": {
-  "t0": "2026-10-12 10:33 NY",
-  "follow_base": 163964.22,
-  "alpaca_base": 100000.0,
-  "follow_src": "2026-10-12 10:33:06"
- },
+ "race": null,
  "exec": {
   "fills": 5739,
   "buy_notional": 47299840.78088428,
@@ -37,7 +32,7 @@
   "LMT:2026-10-19": true,
   "NEM:2026-10-19": true
  },
- "last_report": "2026-10-16",
+ "last_report": "2026-10-19",
  "last_fill_check": "2026-10-19T00:00:00Z",
  "pending": {
   "NEM": {
