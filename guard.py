@@ -49,6 +49,22 @@ def _ran_session(run_id) -> bool:
     return res.stdout.strip().strip('"') not in ("skipped", "none")
 
 
+def _report_sent_today(ny) -> bool:
+    """今日收盘日报是否已发(读仓库 trader.json 的 last_report)。
+    查询失败返回 False (fail-open: 维持现状照常启动)。"""
+    try:
+        res = subprocess.run(
+            ["gh", "api", "repos/%s/contents/data/trader.json?ref=main" % REPO,
+             "-H", "Accept: application/vnd.github.raw"],
+            capture_output=True, text=True, timeout=30)
+        if res.returncode != 0 or not res.stdout.strip():
+            return False
+        return (json.loads(res.stdout).get("last_report")
+                == ny.strftime("%Y-%m-%d"))
+    except Exception:
+        return False
+
+
 def decide():
     """返回 (start, action, reason)"""
     schedule = os.environ.get("SCHEDULE", "")
@@ -86,6 +102,12 @@ def decide():
     # (session.py 自己会判断盘前等待/收盘补轮/周末退出, 不会误交易)
     if schedule and not (NY_OPEN <= (ny.hour, ny.minute) < NY_CLOSE):
         return "false", "skip", "outside NY window (%s)" % ny.strftime("%H:%M %Z")
+    # 收盘后且今日日报已发: 不再起新会话。收盘会话补跑一轮即退, 退了
+    # 看门狗 5 分钟后又起新的, 空转到 21:00 —— 每个新会话都是一次
+    # 潜在的重复日报风险 (2026-10-21 双日报)。日报没发(会话收盘前被杀)
+    # 时仍放行, 让后来的会话把日报补发出去。cron 和 dispatch 都门控。
+    if (ny.hour, ny.minute) >= (16, 10) and _report_sent_today(ny):
+        return "false", "skip", "after close, daily report already sent"
     return "true", "session", "no active session, NY %s" % ny.strftime("%H:%M %Z")
 
 

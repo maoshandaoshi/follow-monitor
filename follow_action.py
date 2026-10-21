@@ -186,9 +186,11 @@ def market_open(now_ny) -> bool:
     if now_ny.weekday() >= 5:
         return False
     hm = (now_ny.hour, now_ny.minute)
-    # 含 16:00 整点: 收盘那一刻的补跑轮要能刷新 latest.json,
-    # 否则对战日报用的是两分钟前的旧快照
-    return (9, 30) <= hm <= (16, 0)
+    # 放到 16:05: 收盘补跑轮(16:00-16:05 之间被调度到)也要能刷新快照,
+    # 否则新 runner 里没有 latest.json, 对战日报缺盈立一侧数据
+    # (2026-10-21 16:01 的第二份日报就没有快照)。
+    # alpaca_trade.py 的交易窗口仍是 9:30-16:00, 盘后只读不交易。
+    return (9, 30) <= hm <= (16, 5)
 
 
 # ---------------- 状态与 diff ----------------

@@ -117,6 +117,8 @@ jobs:
       - name: Market session (poll loop)
         env:
           LOOP_INTERVAL: "90"
+          # 日报推送前读远端 trader.json 做幂等校验(防多 runner 重复发日报)
+          GH_TOKEN: ${{ github.token }}
           LOOP_MAX_HOURS: "5"
           USMART_PHONE:       ${{ secrets.USMART_PHONE }}
           USMART_PASSWORD:    ${{ secrets.USMART_PASSWORD }}

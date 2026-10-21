@@ -157,8 +157,8 @@ def push(title: str, text: str):
 
 
 # ---------------- Alpaca API ----------------
-def api_get(path):
-    r = SESSION.get(f"{BASE}{path}", headers=_hdr(), timeout=15)
+def api_get(path, params=None):
+    r = SESSION.get(f"{BASE}{path}", headers=_hdr(), params=params, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -605,13 +605,23 @@ def _warn_once(st: dict, sym: str, msg: str):
 
 def collect_fills(st: dict, now_ny):
     """统计成交滑点: 与到达价比较。按订单 id 去重(旧版每轮全量重复累计,
-    2026-10-15 一天虚增 1194 笔)。"""
+    2026-10-15 一天虚增 1194 笔)。
+
+    2026-10-22 审计修正: 历史 exec 计数 5798 笔 vs 真实成交 141 笔,
+    污染全部来自 10-15 去重修复之前; 修复后每日新增与 API 完全一致。
+    此处再做两道加固:
+      - after 走 params 传参(旧版拼进 URL 未编码冒号, 有被忽略的风险)
+      - seen_fills 保持**有序列表**从头部淘汰(旧版 set->list 随机顺序
+        截断, 会把未超期的 id 挤出去导致重复计数)
+    """
     after = st.get("last_fill_check")
     try:
-        path = f"/orders?status=closed&limit=100&nested=false" + \
-               (f"&after={after}" if after else "")
-        seen = set(st.get("seen_fills") or [])
-        for o in api_get(path):
+        params = {"status": "closed", "limit": 100, "nested": "false"}
+        if after:
+            params["after"] = after
+        seen_list = list(st.get("seen_fills") or [])
+        seen = set(seen_list)
+        for o in api_get("/orders", params):
             if o.get("status") != "filled" or not str(o.get("client_order_id", "")).startswith("m"):
                 continue
             oid = o.get("id")
@@ -626,6 +636,7 @@ def collect_fills(st: dict, now_ny):
             ex = st["exec"]
             ex["fills"] += 1
             seen.add(oid)
+            seen_list.append(oid)
             if arrival:
                 slip = ((arrival - fpx) if side == "buy" else (fpx - arrival)) / arrival
                 if side == "buy":
@@ -635,31 +646,78 @@ def collect_fills(st: dict, now_ny):
                     ex["sell_notional"] += notional
                     ex["sell_slip"] += slip * notional
             print(f"[FILL] {side} {fq:g} {sym} @ {fpx} (arrival={arrival})")
-        # 只保留最近 500 个 id, 防止 state 无限膨胀
-        st["seen_fills"] = list(seen)[-500:]
+        # 有序保留最近 2000 个 id(从头部淘汰最老的), 防 state 无限膨胀
+        st["seen_fills"] = seen_list[-2000:]
     except Exception as e:
         print(f"[FILLS-ERR] {e}")
     st["last_fill_check"] = f"{now_ny.astimezone(ZoneInfo('UTC')):%F}T00:00:00Z"
 
 
 # ---------------- 报告 ----------------
+def remote_last_report() -> str:
+    """读**远端仓库** trader.json 的 last_report, 推送日报前做幂等校验。
+
+    背景(2026-10-21 双日报事故): 16:00 的会话发完日报后 commit 尚未落地,
+    16:01 新会话按旧检出启动, 本地 last_report 仍是昨天 -> 再发一次。
+    本地状态追不上多 runner 并发, 只有远端仓库是唯一事实源。
+    查询失败返回 "" (fail-open: 宁可重发, 不能漏发)。
+    """
+    tok = os.environ.get("GH_TOKEN", "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not (tok and repo):
+        return ""
+    try:
+        r = SESSION.get(
+            f"https://api.github.com/repos/{repo}/contents/data/trader.json",
+            headers={"Authorization": f"Bearer {tok}",
+                     "Accept": "application/vnd.github.raw",
+                     "User-Agent": "follow-monitor"},
+            params={"ref": "main"}, timeout=15)
+        if r.status_code != 200:
+            print(f"[GH] 远端 trader.json 查询 {r.status_code}, 按未发送处理")
+            return ""
+        return (json.loads(r.text).get("last_report") or "")
+    except Exception as e:
+        print(f"[GH] 远端 last_report 查询失败({type(e).__name__}: {e}), "
+              f"按未发送处理")
+        return ""
+
+
+
 def race_lines(st: dict, latest: dict, equity: float) -> list:
-    """对战对比: 起点数额 -> 当前数额 -> 收益率 (两边都从同一个时刻起算)"""
+    """对战对比: 起点数额 -> 当前数额 -> 收益率 (两边都从同一个时刻起算)
+
+    盈立快照缺失时的兜底(2026-10-22): latest.json 是会话本机文件,
+    新 runner 里没有; 收盘补轮在 16:00 之后 follow_action 又不刷新。
+    旧版此时 fr 按 0.00% 算, "领先"行把 Alpaca 的全部收益当成领先幅度,
+    严重误导。现在回退到 trader.json 里缓存的最近一次快照(标注时间),
+    连缓存都没有就不显示"领先"行 —— 缺一边数据时不做比较。
+    """
     r = st.get("race")
     if not r:
         return ["(对战未开始: 等第一次可执行的镜像调仓)"]
     fb = float(r.get("follow_base") or 0)
     ab = float(r.get("alpaca_base") or 0)
     cur_f = float(latest.get("total_asset") or 0)
-    fr = (cur_f / fb - 1) if (fb > 0 and cur_f > 0) else 0.0
-    ar = (equity / ab - 1) if (ab > 0 and equity > 0) else 0.0
-    lead = ar - fr
-    return [f"盈立 {fb:,.0f} → {cur_f:,.0f}  {fr*100:+.2f}%"
-            if cur_f > 0 else f"盈立 起点 {fb:,.0f} (本轮无快照)",
-            f"Alpaca  {ab:,.0f} → {equity:,.0f}  {ar*100:+.2f}%"
-            if equity > 0 else f"Alpaca 起点 {ab:,.0f} (无权益)",
-            f"{'Alpaca' if lead >= 0 else '盈立'} 领先 {abs(lead)*100:.2f} pt"
-            f"   起点 {r.get('t0', '')}"]
+    note = ""
+    if cur_f <= 0:
+        fl = st.get("follow_last") or {}
+        cur_f = float(fl.get("asset") or 0)
+        if cur_f > 0:
+            note = f" (快照 {fl.get('ts') or ' earlier'})"
+    fr = (cur_f / fb - 1) if (fb > 0 and cur_f > 0) else None
+    ar = (equity / ab - 1) if (ab > 0 and equity > 0) else None
+    out = [f"盈立 {fb:,.0f} → {cur_f:,.0f}  {fr*100:+.2f}%{note}"
+           if fr is not None else f"盈立 起点 {fb:,.0f} (暂无快照)",
+           f"Alpaca  {ab:,.0f} → {equity:,.0f}  {ar*100:+.2f}%"
+           if ar is not None else f"Alpaca 起点 {ab:,.0f} (无权益)"]
+    if fr is not None and ar is not None:
+        lead = ar - fr
+        out.append(f"{'Alpaca' if lead >= 0 else '盈立'} 领先 "
+                   f"{abs(lead)*100:.2f} pt   起点 {r.get('t0', '')}")
+    else:
+        out.append(f"起点 {r.get('t0', '')} (缺一侧数据, 本轮不比)")
+    return out
 
 
 def pending_lines(st: dict) -> list:
@@ -695,7 +753,7 @@ def exec_lines(st: dict) -> list:
         return ["执行: 暂无成交"]
     def avg(n, s):
         return (s / n * 100) if n else 0.0
-    return [f"执行: {ex['fills']} 笔成交",
+    return [f"执行(本次对战): {ex['fills']} 笔成交",
             f"买入滑点 {avg(ex['buy_notional'], ex['buy_slip']):+.3f}% "
             f"(正=比信号到达价便宜)  卖出滑点 "
             f"{avg(ex['sell_notional'], ex['sell_slip']):+.3f}% (正=卖得更贵)"]
@@ -719,6 +777,11 @@ def main():
     open_now = market_open(now_ny)
     latest = read_latest()
     st = load_state()
+    # 缓存最近一次盈立快照到 trader.json: latest.json 是会话本机文件
+    # (gitignore), 新 runner/收盘补轮拿不到, 日报用它兜底(标注快照时间)
+    if float(latest.get("total_asset") or 0) > 0:
+        st["follow_last"] = {"asset": float(latest["total_asset"]),
+                             "ts": str(latest.get("ts") or "")}
     acct = account()
     equity = float(acct.get("portfolio_value") or 0)
     held = positions_map()
@@ -757,12 +820,13 @@ def main():
     if st["targets"] and open_now and not MANUAL:
         execute(st, now_ny, equity)
 
-    # 3) 对战起点: 第一次"可执行"的镜像调仓 —— 同一轮、同一时刻取双方数额,
-    #    所以起点这一刻两边收益率必然都是 0.00%。
-    #    收盘/周末/手动查询都不会误启(原来周末测试跑一次就把基线写死了,
-    #    导致第一次真调仓时两边起点对不齐)。
+    # 3) 对战起点: **只在"新调仓信号到达且可执行"那一轮**播种 —— 同一轮、
+    #    同一时刻取双方数额, 起点这一刻两边必然都是 0.00%。
+    #    旧版只要求 target_src_ts 存在: race 被清空后, 任意盘中轮次都会
+    #    拿着几天前的旧信号立刻误播种 (2026-10-19 15:53 收盘前 7 分钟
+    #    误起点, 起点时刻毫无调仓语义)。sig_text 非空 = 本轮确有新信号。
     seeded = False
-    if open_now and not MANUAL and st.get("target_src_ts") and not st.get("race"):
+    if sig_text and open_now and not MANUAL and not st.get("race"):
         st["race"] = {"t0": f"{now_ny:%F %H:%M} NY",
                       "follow_base": float(latest.get("total_asset") or 0),
                       "alpaca_base": equity,
@@ -793,10 +857,17 @@ def main():
         # 收盘后先对账一次: 把收盘时已过期/已成交的挂单登记清掉,
         # 日报里的"未完成挂单"才是真实状态
         _reconcile_pending(st)
-        st["last_report"] = today
-        push("对战日报",
-             "\n".join(race_lines(st, latest, equity) + gap_lines(st, held)
-                       + pending_lines(st) + exec_lines(st)))
+        # 幂等校验: 本地 last_report 追不上多 runner 并发(16:00 会话 commit
+        # 未落地, 16:01 新会话按旧检出启动又发一次 —— 2026-10-21 双日报),
+        # 推前必须问远端仓库这个唯一事实源
+        if remote_last_report() == today:
+            print("[REPORT] 远端今日日报已发, 跳过(防多 runner 重复推送)")
+            st["last_report"] = today
+        else:
+            st["last_report"] = today
+            push("对战日报",
+                 "\n".join(race_lines(st, latest, equity) + gap_lines(st, held)
+                           + pending_lines(st) + exec_lines(st)))
 
     save_state(st)
     print("[DONE]")
