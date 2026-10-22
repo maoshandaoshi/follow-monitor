@@ -26,11 +26,11 @@
   "follow_src": "2026-10-21 16:00:49"
  },
  "exec": {
-  "fills": 19,
+  "fills": 20,
   "buy_notional": 28952.109662000003,
   "buy_slip": 24.032812122676162,
-  "sell_notional": 52504.630000000005,
-  "sell_slip": -211.00474226082707
+  "sell_notional": 52544.11000000001,
+  "sell_slip": -210.9897365595728
  },
  "warned": {
   "BE:2026-10-22": true,
@@ -43,15 +43,7 @@
  },
  "last_report": "2026-10-21",
  "last_fill_check": "2026-10-22T00:00:00Z",
- "pending": {
-  "SQQQ": {
-   "id": "cece3ca8-4334-4c18-aa38-b73afb2b7de1",
-   "side": "sell",
-   "qty": 1,
-   "px": 39.48,
-   "ts": "2026-10-22 13:05:21"
-  }
- },
+ "pending": {},
  "seen_fills": [
   "e3589628-2d65-4143-be7c-36ab7134ab30",
   "6240f2a2-37e8-43ac-bb9e-18125d963b71",
@@ -212,12 +204,13 @@
   "386aa353-a6e5-4955-92c8-728154b8a043",
   "7fcf7be5-65f3-4cfb-800d-686bdc66aa52",
   "c906363d-098c-40d0-a35b-bfdb5c29d895",
-  "afc662cc-0690-4cb6-8184-c88eef90daac"
+  "afc662cc-0690-4cb6-8184-c88eef90daac",
+  "cece3ca8-4334-4c18-aa38-b73afb2b7de1"
  ],
- "_cash": 24588.61,
+ "_cash": 24628.09,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 146976.39,
-  "ts": "2026-10-22 13:05:19"
+  "asset": 146970.65,
+  "ts": "2026-10-22 13:06:59"
  }
 }
