@@ -44,7 +44,7 @@
   "TDY:2026-10-26": true,
   "VLO:2026-10-26": true
  },
- "last_report": "2026-10-23",
+ "last_report": "2026-10-26",
  "last_fill_check": "2026-10-26T00:00:00Z",
  "pending": {},
  "seen_fills": [
@@ -258,7 +258,7 @@
  "_cash": 45888.9,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 144211.92,
-  "ts": "2026-10-26 15:58:57"
+  "asset": 144170.1,
+  "ts": "2026-10-26 16:01:31"
  }
 }
