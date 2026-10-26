@@ -26,11 +26,11 @@
   "follow_src": "2026-10-21 16:00:49"
  },
  "exec": {
-  "fills": 48,
+  "fills": 49,
   "buy_notional": 69329.73978399999,
   "buy_slip": 44.11149967822341,
-  "sell_notional": 117417.38002200001,
-  "sell_slip": -152.17362357879568
+  "sell_notional": 117473.84002200002,
+  "sell_slip": -152.1636218073165
  },
  "warned": {
   "IOT:2026-10-26": true,
@@ -39,12 +39,19 @@
  "last_report": "2026-10-23",
  "last_fill_check": "2026-10-26T00:00:00Z",
  "pending": {
-  "FNGD": {
-   "id": "cd62c3ac-e880-4bcb-a5bf-5edb02ab2125",
-   "side": "sell",
-   "qty": 2,
-   "px": 28.17,
-   "ts": "2026-10-26 09:43:35"
+  "IOT": {
+   "id": "aec9eb87-441c-4de9-bf39-6f7af141fe22",
+   "side": "buy",
+   "qty": 102,
+   "px": 43.85,
+   "ts": "2026-10-26 09:45:14"
+  },
+  "TSLA": {
+   "id": "1f221df2-b0fd-430b-8ed8-43fcc12cfaad",
+   "side": "buy",
+   "qty": 11,
+   "px": 387.14,
+   "ts": "2026-10-26 09:45:14"
   }
  },
  "seen_fills": [
@@ -236,12 +243,13 @@
   "491a5b51-5b7c-490f-9e33-049ecd20de28",
   "73e6f6cc-0f49-4db0-95ad-a02f70873760",
   "1534e726-431b-43e5-93e5-5e2e7c20efad",
-  "a513f67a-8834-44ab-a632-6bcff4687cca"
+  "a513f67a-8834-44ab-a632-6bcff4687cca",
+  "cd62c3ac-e880-4bcb-a5bf-5edb02ab2125"
  ],
- "_cash": 68735.64,
+ "_cash": 68792.1,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 144712.68,
-  "ts": "2026-10-26 09:43:35"
+  "asset": 144800.17,
+  "ts": "2026-10-26 09:45:13"
  }
 }
