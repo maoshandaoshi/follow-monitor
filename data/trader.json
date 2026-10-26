@@ -21,9 +21,9 @@
   "follow_src": "2026-10-21 16:00:49"
  },
  "exec": {
-  "fills": 43,
-  "buy_notional": 69204.999784,
-  "buy_slip": 44.06801361475971,
+  "fills": 45,
+  "buy_notional": 69301.789784,
+  "buy_slip": 44.056607694649045,
   "sell_notional": 115866.890022,
   "sell_slip": -152.37865158658212
  },
@@ -33,20 +33,6 @@
  "last_report": "2026-10-23",
  "last_fill_check": "2026-10-26T00:00:00Z",
  "pending": {
-  "FAZ": {
-   "id": "491a5b51-5b7c-490f-9e33-049ecd20de28",
-   "side": "buy",
-   "qty": 2,
-   "px": 34.36,
-   "ts": "2026-10-26 09:35:09"
-  },
-  "FNGD": {
-   "id": "d0ad0fbe-35ad-4f0c-be0a-1ee1c64da3c2",
-   "side": "buy",
-   "qty": 1,
-   "px": 28.12,
-   "ts": "2026-10-26 09:35:09"
-  },
   "SQQQ": {
    "id": "8d97a38b-ffd1-4e3f-9354-fa758dd61421",
    "side": "sell",
@@ -239,14 +225,16 @@
   "b51ba3dc-9921-453f-8bca-3bfdca6efcc2",
   "2301fb18-1776-45e9-959c-d3c6a386fb50",
   "be1a35db-7db3-473c-8bcd-78363261d221",
-  "93208c22-4ea2-4f4a-999d-0608f4efb3e2"
+  "93208c22-4ea2-4f4a-999d-0608f4efb3e2",
+  "d0ad0fbe-35ad-4f0c-be0a-1ee1c64da3c2",
+  "491a5b51-5b7c-490f-9e33-049ecd20de28"
  ],
- "_cash": 59308.82,
+ "_cash": 67213.1,
  "arrival_ts": {
   "SQQQ": 1793021406.038822
  },
  "follow_last": {
-  "asset": 144843.75,
-  "ts": "2026-10-26 09:35:09"
+  "asset": 144832.62,
+  "ts": "2026-10-26 09:36:53"
  }
 }
