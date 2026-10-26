@@ -32,9 +32,9 @@
   "follow_src": "2026-10-21 16:00:49"
  },
  "exec": {
-  "fills": 63,
-  "buy_notional": 96801.549784,
-  "buy_slip": -83.20135782497505,
+  "fills": 64,
+  "buy_notional": 101203.159815,
+  "buy_slip": -82.23160252690941,
   "sell_notional": 126870.28002200002,
   "sell_slip": -153.43404952764422
  },
@@ -46,15 +46,7 @@
  },
  "last_report": "2026-10-23",
  "last_fill_check": "2026-10-26T00:00:00Z",
- "pending": {
-  "SOXS": {
-   "id": "2d8e6bcd-9659-4b94-ba2f-994c8f51d8dc",
-   "side": "buy",
-   "qty": 91,
-   "px": 48.37,
-   "ts": "2026-10-26 12:50:05"
-  }
- },
+ "pending": {},
  "seen_fills": [
   "e3589628-2d65-4143-be7c-36ab7134ab30",
   "6240f2a2-37e8-43ac-bb9e-18125d963b71",
@@ -259,12 +251,13 @@
   "a018761c-42a7-462e-b2f8-8fbf647817ce",
   "47c78099-d07d-4ddd-bcb9-9ac5e005008c",
   "6d7bfb42-7dd5-48af-ab11-9e1f210380b3",
-  "cf5a3331-afbe-487f-bdd1-cded07422c68"
+  "cf5a3331-afbe-487f-bdd1-cded07422c68",
+  "2d8e6bcd-9659-4b94-ba2f-994c8f51d8dc"
  ],
- "_cash": 50716.73,
+ "_cash": 46315.12,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 144323.83,
-  "ts": "2026-10-26 12:50:04"
+  "asset": 144311.39,
+  "ts": "2026-10-26 12:51:43"
  }
 }
