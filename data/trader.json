@@ -38,11 +38,11 @@
   "follow_src": "2026-10-21 16:00:49"
  },
  "exec": {
-  "fills": 84,
+  "fills": 85,
   "buy_notional": 147610.619815,
   "buy_slip": 473.11310130250627,
-  "sell_notional": 145918.150021,
-  "sell_slip": -167.31684659934115
+  "sell_notional": 145951.47002100002,
+  "sell_slip": -167.29182782775382
  },
  "warned": {
   "TDY:2026-10-27": true,
@@ -55,13 +55,6 @@
  "last_report": "2026-10-26",
  "last_fill_check": "2026-10-27T00:00:00Z",
  "pending": {
-  "CAI": {
-   "id": "3834f9d4-7b10-4ebc-9558-8188ada6fe09",
-   "side": "sell",
-   "qty": 1,
-   "px": 33.32,
-   "ts": "2026-10-27 12:35:12"
-  },
   "ESLT": {
    "id": "dc19c635-d623-4905-bfaa-7112a0510a62",
    "side": "buy",
@@ -295,12 +288,13 @@
   "65aebe0f-227a-4830-b69e-bc4e87534ff6",
   "85f21ed1-7c3d-4cf9-b66f-4cddb0371d91",
   "aaafe641-2e64-44f8-983a-198c1b144c5f",
-  "bcfabf31-5144-44bb-a9f7-b9ddb8fb2429"
+  "bcfabf31-5144-44bb-a9f7-b9ddb8fb2429",
+  "3834f9d4-7b10-4ebc-9558-8188ada6fe09"
  ],
- "_cash": 18955.04,
+ "_cash": 18988.36,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 143137.07,
-  "ts": "2026-10-27 12:38:31"
+  "asset": 143196.37,
+  "ts": "2026-10-27 12:40:06"
  }
 }
