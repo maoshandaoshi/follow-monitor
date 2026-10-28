@@ -37,8 +37,12 @@ Alpaca 镜像跟单执行器 (paper)
 
 推送约定(用户明确要求): 只有两类消息会推到手机 ——
   ① 调仓(由 follow_action.py 检测盈立持仓变化后推送"股票代码+比例")
-  ② 收盘对战日报(本脚本 16:00 NY 后推送, 含未完成挂单提示)
+  ② 收盘对战日报(本脚本 20:00 NY 盘后时段结束后推送, 含未完成挂单提示)
 流动性告警/镜像执行细节一律只打日志, 不推送。
+
+时段(2026-10-22 扩展): 监控与镜像覆盖美股完整时段 4:00-20:00 NY,
+  盘前/盘后的调仓同样跟单(extended hours 限价单)。免费行情是 IEX 源,
+  IEX 自身只有 8:00-9:30 / 16:00-17:00 延长时段, 之外报价陈旧就跳过下单。
 """
 import base64
 import hashlib
@@ -86,6 +90,21 @@ def _hdr():
 
 
 def market_open(now_ny) -> bool:
+    """可执行窗口 = 美股完整时段(盘前 4:00 - 盘后 20:00 NY)。
+
+    2026-10-22 前只在 9:30-16:00 交易: 盈立盘前/夜盘的调仓信号虽然能被
+    follow_action 发现(现已 4:00-20:00 全时段检测), 镜像却要等到开盘才动,
+    错过盘前跳空(用户反馈"夜盘和盘前没有跟单")。现在直接按 extended hours
+    下单(limit + TIF day), 由盘口护栏决定能不能真的成交。
+    """
+    if now_ny.weekday() >= 5:
+        return False
+    t = now_ny.hour * 60 + now_ny.minute
+    return 4 * 60 <= t < 20 * 60
+
+
+def regular_hours(now_ny) -> bool:
+    """常规时段 9:30-16:00(用于判断盘口是否来自连续竞价)"""
     if now_ny.weekday() >= 5:
         return False
     t = now_ny.hour * 60 + now_ny.minute
@@ -234,7 +253,7 @@ def place_limit(sym, side, qty, px):
     r = SESSION.post(f"{BASE}/orders", headers=_hdr(), timeout=15, json={
         "symbol": sym, "qty": str(int(qty)), "side": side,
         "type": "limit", "limit_price": f"{px:.2f}",
-        "time_in_force": "day", "extended_hours": False,
+        "time_in_force": "day", "extended_hours": True,
         "client_order_id": f"m{sym[:10]}{int(time.time()*1000)}",
     })
     if r.status_code in (200, 201):
@@ -270,7 +289,8 @@ def quote_of(sym) -> dict:
             ask = max(bid, ref) if bid > 0 else ref
         if bid <= 0 or ask <= 0 or ask < bid:
             return {"ok": False}
-        return {"ok": True, "bid": bid, "ask": ask, "mid": (bid + ask) / 2}
+        return {"ok": True, "bid": bid, "ask": ask, "mid": (bid + ask) / 2,
+                "t": str((s.get("latestTrade") or {}).get("t") or "")}
     except Exception as e:
         print(f"[QUOTE-ERR] {sym}: {e}")
         return {"ok": False}
@@ -402,6 +422,22 @@ def _order_one(st: dict, sym: str, desired: int, held: dict, oo: dict,
     if not q["ok"]:
         print(f"[SKIP] {sym}: 无有效报价")
         return
+    # 盘前/盘后行情来自 IEX 免费源, IEX 自身只有 8:00-9:30 / 16:00-17:00
+    # 的延长时段; 之外拿到的是**陈旧盘口**, 拿它挂单等于盲飞(限价挂在
+    # 早已不存在的价位上)。常规时段不受影响 —— 那时 latestTrade 也可能
+    # 因冷门票超过 10 分钟没成交, 但那是连续竞价的真实状态。
+    if not regular_hours(now_ny) and q.get("t"):
+        try:
+            ts = re.sub(r"\.(\d{6})\d+", r".\1",
+                        str(q["t"]).replace("Z", "+00:00"))
+            lt = datetime.fromisoformat(ts)
+            age_min = (now_ny - lt.astimezone(NY_TZ)).total_seconds() / 60
+            if age_min > 10:
+                print(f"[SKIP] {sym}: 盘前/盘后报价陈旧 {age_min:.0f} 分钟"
+                      f"(IEX 无成交), 本轮不下单")
+                return
+        except Exception:
+            pass
     mid, spread = q["mid"], (q["ask"] - q["bid"]) / max(q["mid"], 1e-9)
     if spread > MAX_SPREAD:
         _warn_once(st, sym, f"{sym} 盘口价差 {spread*100:.1f}% 过大"
@@ -852,8 +888,10 @@ def main():
              "\n".join(alpaca_pos_lines(held) + race_lines(st, latest, equity)
                        + gap_lines(st, held) + pending_lines(st)
                        + exec_lines(st)))
-    elif (st.get("race") and now_ny.hour >= 16
+    elif (st.get("race") and now_ny.hour >= 20
           and st.get("last_report") != today):
+        # 日报时间 16:00 -> 20:00: 盘后时段(16:00-20:00)也在跟单了,
+        # 报告必须覆盖夜盘的调仓与成交, 否则夜盘动作要等第二天才看得到。
         # 收盘后先对账一次: 把收盘时已过期/已成交的挂单登记清掉,
         # 日报里的"未完成挂单"才是真实状态
         _reconcile_pending(st)

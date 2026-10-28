@@ -23,9 +23,11 @@ REPO = "maoshandaoshi/follow-monitor"
 WORKFLOW = "follow.yml"
 KEEPALIVE_CRON = "0 6 * * 0"
 COOLDOWN = timedelta(minutes=10)      # 上一轮结束后的静默期, 防重复启动
-# 纽约时段窗(含盘前盘后)。8:45 起才启动: session.py 盘前等待封顶 45 分钟,
-# 8:45 起跑恰好等到 9:30 开盘; 更早起跑只会等完退出, 白占 runner。
-NY_OPEN, NY_CLOSE = (8, 45), (21, 0)
+# 纽约时段窗 = 美股完整时段(盘前 4:00 - 盘后 20:10)。
+# 会话从 4:00 起就该有: 盈立盘前调仓要能被检测+跟单; 20:00-20:10 留给
+# "补跑收盘日报"的会话(前一个会话达到 5h 上限退出时)。
+# 旧版 8:45-21:00: 盘前 8:45 前、盘后日报发完之后的时段全是盲区。
+NY_OPEN, NY_CLOSE = (4, 0), (20, 10)
 
 
 def out(key, value):
@@ -102,12 +104,13 @@ def decide():
     # (session.py 自己会判断盘前等待/收盘补轮/周末退出, 不会误交易)
     if schedule and not (NY_OPEN <= (ny.hour, ny.minute) < NY_CLOSE):
         return "false", "skip", "outside NY window (%s)" % ny.strftime("%H:%M %Z")
-    # 收盘后且今日日报已发: 不再起新会话。收盘会话补跑一轮即退, 退了
-    # 看门狗 5 分钟后又起新的, 空转到 21:00 —— 每个新会话都是一次
-    # 潜在的重复日报风险 (2026-10-21 双日报)。日报没发(会话收盘前被杀)
-    # 时仍放行, 让后来的会话把日报补发出去。cron 和 dispatch 都门控。
-    if (ny.hour, ny.minute) >= (16, 10) and _report_sent_today(ny):
-        return "false", "skip", "after close, daily report already sent"
+    # 盘后 20:00 且今日日报已发: 不再起新会话。收盘会话补跑一轮即退,
+    # 退了看门狗 5 分钟后又起新的, 空转 —— 每个新会话都是一次潜在的
+    # 重复日报风险 (2026-10-21 双日报)。日报没发(会话收盘前被杀)时仍放行,
+    # 让后来的会话把日报补发出去。cron 和 dispatch 都门控。
+    # 注意: 16:00-20:00 是正常监控时段(夜盘跟单), 绝不能抑制。
+    if (ny.hour, ny.minute) >= (20, 0) and _report_sent_today(ny):
+        return "false", "skip", "after 20:00 NY, daily report already sent"
     return "true", "session", "no active session, NY %s" % ny.strftime("%H:%M %Z")
 
 
