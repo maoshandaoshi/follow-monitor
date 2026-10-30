@@ -74,17 +74,6 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      # 诊断用: 探测盈立行情接口能否在盘前/盘后提供报价(IEX 免费源此时无盘口)。
-      # 只打印不交易, 失败不影响主流程。
-      - name: Quote probe (diagnostic)
-        continue-on-error: true
-        env:
-          USMART_PHONE:       ${{ secrets.USMART_PHONE }}
-          USMART_PASSWORD:    ${{ secrets.USMART_PASSWORD }}
-          USMART_PUBLIC_KEY:  ${{ secrets.USMART_PUBLIC_KEY }}
-          USMART_PRIVATE_KEY: ${{ secrets.USMART_PRIVATE_KEY }}
-        run: python quote_probe.py || true
-
       - name: Manual query (one-shot)
         env:
           MANUAL: "true"
