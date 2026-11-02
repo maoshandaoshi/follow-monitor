@@ -32,9 +32,9 @@
   "follow_src": "2026-10-21 16:00:49"
  },
  "exec": {
-  "fills": 130,
-  "buy_notional": 266065.569911,
-  "buy_slip": 375.07435448450565,
+  "fills": 131,
+  "buy_notional": 266112.789911,
+  "buy_slip": 375.0843523672073,
   "sell_notional": 223031.31006500006,
   "sell_slip": -125.79839877969454
  },
@@ -45,15 +45,7 @@
  },
  "last_report": "2026-10-30",
  "last_fill_check": "2026-11-02T00:00:00Z",
- "pending": {
-  "KWEB": {
-   "id": "660762d2-59eb-42d9-aadb-78453fcdac43",
-   "side": "buy",
-   "qty": 2,
-   "px": 23.61,
-   "ts": "2026-11-02 10:20:53"
-  }
- },
+ "pending": {},
  "seen_fills": [
   "e3589628-2d65-4143-be7c-36ab7134ab30",
   "6240f2a2-37e8-43ac-bb9e-18125d963b71",
@@ -325,12 +317,13 @@
   "a754291a-691d-4aad-9d9a-adef7c9962e4",
   "9bd73bf1-15bb-436b-8a88-341cbdebc348",
   "b433044d-93ef-4b8e-85dd-58da1ccc88dd",
-  "7e6f5a85-460f-44ee-a5ea-47a8c0a31aa3"
+  "7e6f5a85-460f-44ee-a5ea-47a8c0a31aa3",
+  "660762d2-59eb-42d9-aadb-78453fcdac43"
  ],
- "_cash": 8420.2,
+ "_cash": 8372.98,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 138799.36,
-  "ts": "2026-11-02 10:22:34"
+  "asset": 138880.7,
+  "ts": "2026-11-02 10:24:09"
  }
 }
