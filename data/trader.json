@@ -39,7 +39,7 @@
   "NXPI:2026-11-03": true,
   "TXN:2026-11-03": true
  },
- "last_report": "2026-11-02",
+ "last_report": "2026-11-03",
  "last_fill_check": "2026-11-04T00:00:00Z",
  "pending": {},
  "seen_fills": [
@@ -338,7 +338,7 @@
  "_cash": 12494.82,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 138097.78,
-  "ts": "2026-11-03 19:57:18"
+  "asset": 138188.55,
+  "ts": "2026-11-03 20:00:22"
  }
 }
