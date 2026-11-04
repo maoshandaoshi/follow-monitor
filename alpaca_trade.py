@@ -37,7 +37,9 @@ Alpaca 镜像跟单执行器 (paper)
 
 推送约定(用户明确要求): 只有两类消息会推到手机 ——
   ① 调仓(由 follow_action.py 检测盈立持仓变化后推送"股票代码+比例")
-  ② 收盘对战日报(本脚本 20:00 NY 盘后时段结束后推送, 含未完成挂单提示)
+  ② 对战日报(固定**北京时间每个交易日 9:00**, 不随美东冬夏令时漂移;
+     内容精简: 双方总收益+谁领先多少 pt + 持仓表(比例+自起点涨跌),
+     其他一律不写; 全文只出现"盈立"和"Alpaca")
 流动性告警/镜像执行细节一律只打日志, 不推送。
 
 时段(2026-10-22 扩展): 监控与镜像覆盖美股完整时段 4:00-20:00 NY,
@@ -59,6 +61,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 NY_TZ = ZoneInfo("America/New_York")
+BJ_TZ = ZoneInfo("Asia/Shanghai")   # 日报固定北京时间 9:00 发, 不随美东冬夏令时漂移
 DATA_DIR = os.environ.get("DATA_DIR", "data")
 LATEST_FILE = os.path.join(DATA_DIR, "latest.json")   # monitor 写入
 STATE_FILE = os.path.join(DATA_DIR, "trader.json")    # 本脚本状态(由 workflow commit 回仓)
@@ -720,6 +723,101 @@ def remote_last_report() -> str:
 
 
 
+def data_get(path: str, params: dict):
+    r = SESSION.get(f"{DATA}{path}", headers=_hdr(), params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def day_close(sym: str, day: str):
+    """某交易日的日线收盘价(对战起点基线用)。IEX 源; 当日无 bar 返回 None。"""
+    try:
+        bars = (data_get(f"/stocks/{sym}/bars",
+                         params={"timeframe": "1Day", "start": day,
+                                 "end": day, "limit": 10,
+                                 "adjustment": "split", "feed": "iex"}
+                         ).get("bars") or [])
+        for b in bars:
+            if str(b.get("t", "")).startswith(day):
+                return float(b["c"])
+    except Exception as e:
+        print(f"[BAR] {sym} {day} 日线获取失败: {type(e).__name__}: {e}")
+    return None
+
+
+def positions_px() -> dict:
+    """当前持仓市值价 {sym: current_price}(Alpaca positions 接口自带)。"""
+    out = {}
+    try:
+        for p in api_get("/positions"):
+            try:
+                out[p["symbol"]] = float(p["current_price"])
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[PX] 持仓现价获取失败: {type(e).__name__}: {e}")
+    return out
+
+
+def report_lines(st: dict, latest: dict, equity: float) -> list:
+    """对战日报正文(2026-11-05 用户定稿, 精简版):
+
+    ① 双方总收益各一行 + 谁领先/领先多少 pt;
+    ② 持仓表一份(两边比例相同): 每只票 目标比例 + 自对战起点的涨跌
+       (基线 = Alpaca 日线在起点当日的收盘价, 取到后缓存在
+       st["race"]["prices"], 之后不再重复拉历史 K 线)。
+    其他内容(总资产/滑点/挂单/跟单进度)一律不写 —— 用户明确要求。
+    """
+    r = st.get("race") or {}
+    fb = float(r.get("follow_base") or 0)
+    ab = float(r.get("alpaca_base") or 0)
+    cur_f = float(latest.get("total_asset") or 0)
+    note = ""
+    if cur_f <= 0:
+        fl = st.get("follow_last") or {}
+        cur_f = float(fl.get("asset") or 0)
+        if cur_f > 0:
+            note = f" (快照 {fl.get('ts') or ''})"
+    fr = (cur_f / fb - 1) if (fb > 0 and cur_f > 0) else None
+    ar = (equity / ab - 1) if (ab > 0 and equity > 0) else None
+    out = []
+    if fr is None and ar is None:
+        return ["(缺双方数据, 本轮不比)"]
+    if fr is not None:
+        out.append(f"盈立 {fr*100:+.2f}%{note}")
+    if ar is not None:
+        out.append(f"Alpaca {ar*100:+.2f}%")
+    if fr is not None and ar is not None:
+        lead = ar - fr
+        out.append(f"{'Alpaca' if lead >= 0 else '盈立'} 领先 {abs(lead)*100:.2f} pt")
+
+    # 持仓表: 比例用目标权重; 权重缺失时按持仓市值现算
+    weights = {k: float(v) for k, v in (st.get("targets") or {}).items()}
+    pxs = positions_px()
+    if not weights and pxs and equity > 0:
+        held_q = {p["symbol"]: float(p["qty"]) for p in api_get("/positions")}
+        weights = {s: q * pxs[s] / equity * 100
+                   for s, q in held_q.items() if pxs.get(s)}
+    if weights:
+        t0 = str(r.get("t0") or "")[:10]
+        out.append(f"持仓(两边比例相同, 涨跌自 {t0} 起)")
+        base = dict(r.get("prices") or {})
+        dirty = False
+        for sym, w in sorted(weights.items(), key=lambda kv: -kv[1]):
+            px = float(pxs.get(sym) or 0)
+            bp = base.get(sym)
+            if bp is None and px > 0 and t0:
+                bp = day_close(sym, t0)
+                if bp:
+                    base[sym] = bp
+                    dirty = True
+            chg = f"{(px/bp-1)*100:+.1f}%" if (bp and px > 0) else "--"
+            out.append(f"{sym}  {w:.0f}%  {chg}")
+        if dirty:
+            r["prices"] = base
+    return out
+
+
 def race_lines(st: dict, latest: dict, equity: float) -> list:
     """对战对比: 起点数额 -> 当前数额 -> 收益率 (两边都从同一个时刻起算)
 
@@ -804,7 +902,8 @@ def alpaca_pos_lines(held: dict) -> list:
 # ---------------- 主流程 ----------------
 def main():
     now_ny = datetime.now(NY_TZ)
-    print(f"[TIME] NY: {now_ny:%Y-%m-%d %H:%M}  manual={MANUAL}")
+    now_bj = now_ny.astimezone(BJ_TZ)
+    print(f"[TIME] NY: {now_ny:%Y-%m-%d %H:%M}  BJ: {now_bj:%H:%M}  manual={MANUAL}")
 
     if not (ALPACA_KEY and ALPACA_SECRET):
         print("[SKIP] 未配置 ALPACA_KEY_ID / ALPACA_SECRET")
@@ -888,12 +987,13 @@ def main():
              "\n".join(alpaca_pos_lines(held) + race_lines(st, latest, equity)
                        + gap_lines(st, held) + pending_lines(st)
                        + exec_lines(st)))
-    elif (st.get("race") and now_ny.hour >= 20
+    elif (st.get("race") and now_ny.hour >= 20 and now_bj.hour >= 9
           and st.get("last_report") != today):
-        # 日报时间 16:00 -> 20:00: 盘后时段(16:00-20:00)也在跟单了,
-        # 报告必须覆盖夜盘的调仓与成交, 否则夜盘动作要等第二天才看得到。
-        # 收盘后先对账一次: 把收盘时已过期/已成交的挂单登记清掉,
-        # 日报里的"未完成挂单"才是真实状态
+        # 日报固定北京时间每个交易日 9:00 发, 不随美东冬夏令时漂移
+        # (2026-11 用户要求): 冬令时 20:00 NY = 9:00 北京整点即发,
+        # 夏令时 20:00 NY = 8:00 北京, 要等到 21:00 NY 才发。
+        # 盘后时段(16:00-20:00)的调仓与成交全部覆盖。
+        # 收盘后先对账一次: 把收盘时已过期/已成交的挂单登记清掉。
         _reconcile_pending(st)
         # 幂等校验: 本地 last_report 追不上多 runner 并发(16:00 会话 commit
         # 未落地, 16:01 新会话按旧检出启动又发一次 —— 2026-10-21 双日报),
@@ -903,9 +1003,8 @@ def main():
             st["last_report"] = today
         else:
             st["last_report"] = today
-            push("对战日报",
-                 "\n".join(race_lines(st, latest, equity) + gap_lines(st, held)
-                           + pending_lines(st) + exec_lines(st)))
+            push(f"对战日报 {now_ny:%m-%d}",
+                 "\n".join(report_lines(st, latest, equity)))
 
     save_state(st)
     print("[DONE]")
