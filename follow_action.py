@@ -221,6 +221,13 @@ def write_latest(r: dict, rebalance: bool):
         "currency": r["currency"],
         "weights": {s["ticker"]: s["pct_of_total"]
                     for s in r["stocks"] if s["quantity"] > 0},
+        # 日报持仓表用: 每票盈立成本价/现价 -> 持仓盈亏(2026-11-05 用户定稿,
+        # 旧版用"股价自对战起点涨跌"被用户判为错误: 持仓多是起点前建好的,
+        # ISRG 起点后才涨 11.7% 才买入, 显示 +11.8% 而持仓实际 +0.1%)
+        "costs": {s["ticker"]: s["cost"]
+                  for s in r["stocks"] if s["quantity"] > 0 and s["cost"]},
+        "prices": {s["ticker"]: s["price"]
+                   for s in r["stocks"] if s["quantity"] > 0 and s["price"]},
         "rebalance": rebalance,
     }
     with open(LATEST_FILE, "w", encoding="utf-8") as f:

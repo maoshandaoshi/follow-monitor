@@ -763,9 +763,13 @@ def report_lines(st: dict, latest: dict, equity: float) -> list:
     """对战日报正文(2026-11-05 用户定稿, 精简版):
 
     ① 双方总收益各一行 + 谁领先/领先多少 pt;
-    ② 持仓表一份(两边比例相同): 每只票 目标比例 + 自对战起点的涨跌
-       (基线 = Alpaca 日线在起点当日的收盘价, 取到后缓存在
-       st["race"]["prices"], 之后不再重复拉历史 K 线)。
+    ② 持仓表一份(两边比例相同): 每只票 目标比例 + **持仓盈亏**
+       (= 现价/持仓成本 - 1; 成本与现价优先取盈立快照 latest.json 的
+       costs/prices, 与盈立 App 一致可核对; 缺失时兜底用 Alpaca 的
+       avg_entry_price / current_price)。
+       旧版"股价自对战起点涨跌"被用户判为错误(2026-11-05): 持仓多是
+       起点前建好的, ISRG 起点后才涨 11.7% 才买入, 显示 +11.8% 而持仓
+       实际 +0.1% —— 那是市场涨跌不是持仓盈亏。
     其他内容(总资产/滑点/挂单/跟单进度)一律不写 —— 用户明确要求。
     """
     r = st.get("race") or {}
@@ -799,22 +803,21 @@ def report_lines(st: dict, latest: dict, equity: float) -> list:
         weights = {s: q * pxs[s] / equity * 100
                    for s, q in held_q.items() if pxs.get(s)}
     if weights:
-        t0 = str(r.get("t0") or "")[:10]
-        out.append(f"持仓(两边比例相同, 涨跌自 {t0} 起)")
-        base = dict(r.get("prices") or {})
-        dirty = False
+        out.append("持仓(两边比例相同, 涨跌为持仓盈亏)")
+        # 盈立成本/现价优先(与盈立 App 一致); 缺失兜底 Alpaca avg_entry/现价
+        costs = {k: float(v) for k, v in (latest.get("costs") or {}).items()}
+        uprices = {k: float(v) for k, v in (latest.get("prices") or {}).items()}
+        avgs = {}
+        try:
+            for p in api_get("/positions"):
+                avgs[p["symbol"]] = float(p["avg_entry_price"])
+        except Exception:
+            pass
         for sym, w in sorted(weights.items(), key=lambda kv: -kv[1]):
-            px = float(pxs.get(sym) or 0)
-            bp = base.get(sym)
-            if bp is None and px > 0 and t0:
-                bp = day_close(sym, t0)
-                if bp:
-                    base[sym] = bp
-                    dirty = True
-            chg = f"{(px/bp-1)*100:+.1f}%" if (bp and px > 0) else "--"
+            cost = costs.get(sym) or avgs.get(sym) or 0
+            px = float(uprices.get(sym) or pxs.get(sym) or 0)
+            chg = f"{(px/cost-1)*100:+.1f}%" if (cost > 0 and px > 0) else "--"
             out.append(f"{sym}  {w:.0f}%  {chg}")
-        if dirty:
-            r["prices"] = base
     return out
 
 
