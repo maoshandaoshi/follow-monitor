@@ -43,11 +43,11 @@
   }
  },
  "exec": {
-  "fills": 236,
+  "fills": 237,
   "buy_notional": 550420.6798650002,
   "buy_slip": 747.4894380381527,
-  "sell_notional": 488703.08010900003,
-  "sell_slip": 422.316622239841
+  "sell_notional": 489019.04010900005,
+  "sell_slip": 422.6269266909736
  },
  "warned": {
   "EVRG:2026-11-11": true,
@@ -436,12 +436,13 @@
   "dda1d638-db7a-4f66-8dad-5b9d092207aa",
   "2a07a25d-6462-4db8-ba72-1fc3bddf28ac",
   "8e5eab2b-4e52-4c22-8daf-e72928c9a766",
-  "7f5a5f83-ada9-48b3-8f86-2c5baa5ec2e9"
+  "7f5a5f83-ada9-48b3-8f86-2c5baa5ec2e9",
+  "8789538f-d805-4dca-8840-8ee903edc029"
  ],
  "_cash": 15512.03,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 132438.2,
-  "ts": "2026-11-11 11:20:42"
+  "asset": 132363.77,
+  "ts": "2026-11-11 11:22:17"
  }
 }
