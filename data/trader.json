@@ -43,9 +43,9 @@
   }
  },
  "exec": {
-  "fills": 252,
-  "buy_notional": 597057.2498650001,
-  "buy_slip": 942.9001588940464,
+  "fills": 253,
+  "buy_notional": 604888.1498650002,
+  "buy_slip": 955.9284475751336,
   "sell_notional": 532155.510079,
   "sell_slip": 544.6093558752468
  },
@@ -61,13 +61,6 @@
  "last_report": "2026-11-11",
  "last_fill_check": "2026-11-12T00:00:00Z",
  "pending": {
-  "DGX": {
-   "id": "32acfe92-83e9-45de-b31d-2c2a317f9596",
-   "side": "buy",
-   "qty": 30,
-   "px": 261.05,
-   "ts": "2026-11-12 10:49:31"
-  },
   "TXN": {
    "id": "9aededfd-7bf1-4787-b3ac-e40277d6ae3e",
    "side": "buy",
@@ -469,12 +462,13 @@
   "56aea34b-b8b6-45fa-b204-2f4af2738d89",
   "aa42bdbc-9b7f-4800-af37-8e72b18de23f",
   "b46229ac-1d71-4beb-bf9d-a9addaca4097",
-  "18c6beae-b693-42ae-b187-bc51d98d086c"
+  "18c6beae-b693-42ae-b187-bc51d98d086c",
+  "32acfe92-83e9-45de-b31d-2c2a317f9596"
  ],
- "_cash": 24303.44,
+ "_cash": 16472.54,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 131410.97,
-  "ts": "2026-11-12 10:51:08"
+  "asset": 131421.97,
+  "ts": "2026-11-12 10:52:46"
  }
 }
