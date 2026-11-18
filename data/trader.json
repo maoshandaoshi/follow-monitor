@@ -32,26 +32,18 @@
   }
  },
  "exec": {
-  "fills": 312,
+  "fills": 313,
   "buy_notional": 735071.8697690001,
   "buy_slip": 908.3912595026146,
-  "sell_notional": 635623.230012,
-  "sell_slip": 599.2576395497241
+  "sell_notional": 641835.5500119999,
+  "sell_slip": 600.5779200842602
  },
  "warned": {
   "FAZ:2026-11-18": true
  },
  "last_report": "2026-11-17",
  "last_fill_check": "2026-11-18T00:00:00Z",
- "pending": {
-  "NVDA": {
-   "id": "5a55bbf2-d66d-4125-b78d-e5bda3b6bab0",
-   "side": "sell",
-   "qty": 40,
-   "px": 155.29,
-   "ts": "2026-11-18 09:43:02"
-  }
- },
+ "pending": {},
  "seen_fills": [
   "e3589628-2d65-4143-be7c-36ab7134ab30",
   "6240f2a2-37e8-43ac-bb9e-18125d963b71",
@@ -505,14 +497,15 @@
   "c2e82a80-dbb2-489f-b44e-fccc5ec6d9c8",
   "f7e71e96-0a34-4c23-8116-eabf7e04af55",
   "4b67157b-107f-4d2b-95d2-65b9551f797c",
-  "694e664f-cccc-4745-ae45-75000d63fab4"
+  "694e664f-cccc-4745-ae45-75000d63fab4",
+  "5a55bbf2-d66d-4125-b78d-e5bda3b6bab0"
  ],
- "_cash": 14051.27,
+ "_cash": 20263.59,
  "arrival_ts": {
   "NVDA": 1795012982.072201
  },
  "follow_last": {
-  "asset": 129463.5,
-  "ts": "2026-11-18 09:42:59"
+  "asset": 129505.9,
+  "ts": "2026-11-18 09:44:39"
  }
 }
