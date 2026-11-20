@@ -37,9 +37,9 @@
   }
  },
  "exec": {
-  "fills": 327,
-  "buy_notional": 769852.6197180002,
-  "buy_slip": 952.2897714556084,
+  "fills": 328,
+  "buy_notional": 773777.4997180002,
+  "buy_slip": 945.8893510895998,
   "sell_notional": 657916.760029,
   "sell_slip": 606.921621612721
  },
@@ -48,15 +48,7 @@
  },
  "last_report": "2026-11-19",
  "last_fill_check": "2026-11-20T00:00:00Z",
- "pending": {
-  "AMDD": {
-   "id": "73150f5d-beed-4cf8-ae59-7e3aa1fd0da5",
-   "side": "buy",
-   "qty": 142,
-   "px": 27.64,
-   "ts": "2026-11-20 11:43:27"
-  }
- },
+ "pending": {},
  "seen_fills": [
   "e3589628-2d65-4143-be7c-36ab7134ab30",
   "6240f2a2-37e8-43ac-bb9e-18125d963b71",
@@ -525,12 +517,13 @@
   "b65c3c6d-3099-4c82-82bc-645099bbfa67",
   "51c464a8-fb93-4ded-be97-405f2c523fea",
   "dca0388b-3b73-4529-8ce4-54d206b925d0",
-  "e0eb1110-252a-4f42-beed-7394eebe4566"
+  "e0eb1110-252a-4f42-beed-7394eebe4566",
+  "73150f5d-beed-4cf8-ae59-7e3aa1fd0da5"
  ],
- "_cash": 4861.39,
+ "_cash": 936.51,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 129897.08,
-  "ts": "2026-11-20 11:43:26"
+  "asset": 129865.47,
+  "ts": "2026-11-20 11:45:05"
  }
 }
