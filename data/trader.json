@@ -43,7 +43,7 @@
  "warned": {
   "AMDD:2026-11-23": true
  },
- "last_report": "2026-11-20",
+ "last_report": "2026-11-23",
  "last_fill_check": "2026-11-24T00:00:00Z",
  "pending": {},
  "seen_fills": [
@@ -525,7 +525,7 @@
  "_cash": 4950.07,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 130037.01,
-  "ts": "2026-11-23 19:57:21"
+  "asset": 130006.86,
+  "ts": "2026-11-23 20:00:25"
  }
 }
