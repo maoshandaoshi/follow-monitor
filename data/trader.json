@@ -42,17 +42,9 @@
   "PDD:2026-11-24": true,
   "QQQ:2026-11-24": true
  },
- "last_report": "2026-11-23",
+ "last_report": "2026-11-24",
  "last_fill_check": "2026-11-25T00:00:00Z",
- "pending": {
-  "SGOV": {
-   "id": "b0c9302e-558d-4983-bb54-4d505186a4db",
-   "side": "buy",
-   "qty": 1,
-   "px": 100.65,
-   "ts": "2026-11-24 10:45:40"
-  }
- },
+ "pending": {},
  "seen_fills": [
   "e3589628-2d65-4143-be7c-36ab7134ab30",
   "6240f2a2-37e8-43ac-bb9e-18125d963b71",
