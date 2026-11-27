@@ -50,7 +50,7 @@
   "CHKP:2026-11-25": true,
   "DPZ:2026-11-25": true
  },
- "last_report": "2026-11-25",
+ "last_report": "2026-11-26",
  "last_fill_check": "2026-11-27T00:00:00Z",
  "pending": {},
  "seen_fills": [
@@ -542,7 +542,7 @@
  "_cash": 1266.93,
  "arrival_ts": {},
  "follow_last": {
-  "asset": 129827.37,
-  "ts": "2026-11-26 19:57:23"
+  "asset": 129844.57,
+  "ts": "2026-11-26 20:00:27"
  }
 }
